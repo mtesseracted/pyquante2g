@@ -1,0 +1,11 @@
+# editor files
+*~
+*.swp
+.vscode/
+# data files
+*.xyz
+*.sdf
+*.cif
+*.mol
+# build files
+__pycache__
