@@ -4,7 +4,7 @@ from collections import Counter
 
 # local imports
 from elements import element_symbols, element_masses, element_radii, element_colors
-from file_utils import read_xyz, read_mol, read_xyz_lines
+from utils.file_utils import read_xyz, read_mol, read_xyz_lines
 
 # shorthands for array / linear alg ops so they can be changed easily
 # try:
@@ -269,8 +269,8 @@ if __name__ == "__main__":
     import numpy as np
     import matplotlib.pyplot as plt
     from samples.samples import raw_samples, taxol_raw, raw_drugs
-    from file_utils import read_xyz_lines
-    from plotting_utils import plot_molecule_3d, plot_molecule_3d_scatter
+    from utils.file_utils import read_xyz_lines
+    from utils.plotting_utils import plot_molecule_3d, plot_molecule_3d_scatter
 
     samp_files = [os.path.join('samples',f) 
                   for  f in os.listdir('samples') 
