@@ -2,10 +2,12 @@
 *~
 *.swp
 .vscode/
+# build files
+__pycache__
 # data files
 *.xyz
 *.sdf
 *.cif
 *.mol
-# build files
-__pycache__
+*.gbs
+

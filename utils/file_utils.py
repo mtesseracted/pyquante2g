@@ -49,9 +49,10 @@ def read_xyz(fname):
     return read_xyz_lines(lines)
 
 def read_xyz_lines(lines):
-    from elements import sym2no
+    from atoms.elements import sym2no
     atuples = []
     for line in lines:
+        if line.strip() == '': continue
         sym,x,y,z = parseline(line,'sfff')
         atno = sym2no[sym]
         atuples.append((atno,x,y,z))
