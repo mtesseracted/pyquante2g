@@ -11,6 +11,8 @@ pow = ch.pow
 exp = ch.exp
 floor = ch.floor
 arr_init = lambda x, dtype=dtype, device=device: ch.as_tensor(x, dtype=dtype, device=device)
+arr_sum = lambda x, axis=None: ch.sum(x, dim=axis)
+arange = ch.arange
 # constants
 pi = arr_init(ch.pi)
 sqpi = ch.sqrt(pi)
@@ -18,6 +20,7 @@ fone = arr_init(1.0)
 ione = arr_init(1, dtype=ch.int32)
 fzero = arr_init(0.0)
 izero = arr_init(0, dtype=ch.int32)
+
 
 def factorial(n):
     if n < 2:
@@ -122,19 +125,29 @@ def overlap_ch(alpha0s, lmn0s, r0s, alpha1s, lmn1s, r1s):
     pcens = (alpha0s[:,None]*r0s + alpha1s[:,None]*r1s) / gammas[:,None]
     pdiff0s = pcens - r0s
     pdiff1s = pcens - r1s
-    l0s, m0s, n0s = lmn0s[:,0], lmn0s[:,1], lmn0s[:,2]
-    l1s, m1s, n1s = lmn1s[:,0], lmn1s[:,1], lmn1s[:,2]
-    px0s, px1s = pdiff0s[:,0], pdiff1s[:,1]
     ret = pow(pi/gammas, 3/2) * exp(-(alpha0s*alpha1s)*r12sqs/gammas)
-    ret *= overlap1d_ch(lmn0s[:,0], lmn1s[:,0], pdiff0s[:,0], pdiff1s[:,0], gammas)
-    ret *= overlap1d_ch(lmn0s[:,1], lmn1s[:,1], pdiff0s[:,1], pdiff1s[:,1], gammas)
-    ret *= overlap1d_ch(lmn0s[:,2], lmn1s[:,2], pdiff0s[:,2], pdiff1s[:,2], gammas)
+    ret *= overlap1d_ch2(lmn0s[:,0], lmn1s[:,0], pdiff0s[:,0], pdiff1s[:,0], gammas)
+    ret *= overlap1d_ch2(lmn0s[:,1], lmn1s[:,1], pdiff0s[:,1], pdiff1s[:,1], gammas)
+    ret *= overlap1d_ch2(lmn0s[:,2], lmn1s[:,2], pdiff0s[:,2], pdiff1s[:,2], gammas)
     return ret
 
 
 def dfact2m1o2(n):
     """ double factorial of 2n-1 over 2**n """
     return ch.exp(ch.lgamma(n + 0.5*fone)) / sqpi
+
+def overlap1d_ch2(l0s, l1s, px0s, px1s, gammas):
+    """ assume same numbers of 0s and 1s, and we need to calc the overlaps
+    between them, so return is the same len as the ls, pdiffs, and gammas
+    (PySEC pdist2 logic style for the distance func)
+    """
+
+    typ, dev = gammas.dtype, gammas.device
+    bipres = binomial_prefactors_ch_all(l0s, l1s, px0s, px1s)
+    irng = ch.arange(ione * bipres.shape[1], device=dev)
+    totals = bipres * dfact2m1o2(irng)[None,:] * pow(gammas[:,None], -irng[None,:])
+    return arr_sum(totals, axis=1)
+
 
 
 def overlap1d_ch(l0s, l1s, px0s, px1s, gammas):
@@ -159,40 +172,74 @@ def overlap1d_ch(l0s, l1s, px0s, px1s, gammas):
         # totals += tmp * fact2(2*i-1) / pow(2*gammas, i)
     return totals
 
-# def binomial_prefactor(s,ia,ib,xpa,xpb):
-#     total= 0
-#     for t in ch.arange(s+1, device=device):
-#         if s-ia <= t <= ib:
-#             total +=  binom_ch(ia,s-t)*binom_ch(ib,t)* \
-#                      pow(xpa,ia-s+t)*pow(xpb,ib-t)
 
-def orig_prefac_sub(s, ia, ib, xpa, xpb, t):
-    if s-ia <= t <= ib:
-        return binom_ch(ia,s-t) * binom_ch(ib,t)* \
-            pow(xpa,ia-s+t) * pow(xpb,ib-t)
-    else:
-        return fzero
-
-
-
-def binomial_prefactors_ch(ll, l0s, l1s, px0s, px1s):
+def binomial_prefactors_ch(ll, l0s, l1s, px0s, px1s, opt=False):
     krng = ch.arange(ll+1, device=ll.device)
     mask = ((ll-l0s)[:,None] <= krng[None,:]) & (krng[None,:] <= l1s[:,None])
 
-    # subset to only the necessary k's in k-range
-    kmsk = mask.any(dim=0)
-    krng = krng[kmsk]
-    mask = ((ll-l0s)[:,None] <= krng[None,:]) & (krng[None,:] <= l1s[:,None])
+    # # subset to only the necessary k's in k-range
+    if opt:
+        kmsk = mask.any(dim=0)
+        krng = krng[kmsk]
+        mask = ((ll-l0s)[:,None] <= krng[None,:]) & (krng[None,:] <= l1s[:,None])
 
     tmps = binom_ch(l0s[:,None], (ll-krng)[None,:]) * \
            binom_ch(l1s[:,None], krng[None,:]) * \
            pow(px0s[:,None], (l0s[:,None] - ll[None,None] + krng[None,:])) * \
            pow(px1s[:,None], (l1s[:,None] - krng[None,:]))
-
-    # ret = (tmps * mask).sum(dim=1) # this won't remove nans!
+    
     tmps[~mask] = fzero
     ret = tmps.sum(dim=1)
     return ret
+
+
+def binomial_prefactors_ch_all(l0s, l1s, px0s, px1s):
+    """
+    Vectorized over all ll in range(ilim+1),
+    where ilim = floor(0.5 * max(l0s + l1s)).
+
+    Inputs are batched 1D tensors (same length B):
+      l0s, l1s : integer tensors [B]
+      px0s, px1s : float tensors [B]
+
+    Returns:
+      ret : [B, ilim] with ret[:, ll] = binomial_prefactors_ch(ll, ...)
+    """
+    device = l0s.device
+    summx = (l0s + l1s).max()
+    ilim = int(ch.floor(0.5 * summx).item())
+
+    # Axes: L for ll (0..ilim), K for k (0..ilim)
+    L = 2 * ch.arange(ilim + 1, device=device)        # [L]
+    K = ch.arange(ilim + 1, device=device)        # [K]
+    LL = L.view(1, -1, 1)                         # [1, L, 1]
+    KK = K.view(1, 1, -1)                         # [1, 1, K]
+
+    # Broadcast batch to [B, 1, 1] then to [B, L, K]
+    l0 = l0s.view(-1, 1, 1)                       # [B,1,1]
+    l1 = l1s.view(-1, 1, 1)                       # [B,1,1]
+    px0 = px0s.view(-1, 1, 1)                     # [B,1,1]
+    px1 = px1s.view(-1, 1, 1)                     # [B,1,1]
+
+    # Valid region: 0 <= k <= ll, (ll - l0) <= k <= l1
+    mask = (KK <= LL) & ((LL - l0) <= KK) & (KK <= l1)   # [B,L,K]
+
+    # Terms (broadcast to [B,L,K])
+    term = (
+        binom_ch(l0, LL - KK) *
+        binom_ch(l1, KK) *
+        (px0 ** (l0 - LL + KK)) *
+        (px1 ** (l1 - KK))
+    )
+
+    # Zero out invalid (avoid any spurious values from binom/powers off-domain)
+    term = ch.where(mask, term, ch.zeros_like(term))
+
+    # Sum over k → output [B, L]
+    ret = term.sum(dim=-1)
+    return ret #, ilim
+
+import torch as ch
 
 
 
@@ -206,6 +253,7 @@ if __name__ == "__main__":
     am131 = arr_init([1, 3, 1], dtype=ch.int32)
     am444 = arr_init([4, 4, 4], dtype=ch.int32)
     am333 = arr_init([3, 3, 3], dtype=ch.int32)
+    am500 = arr_init([5, 0, 0], dtype=ch.int32)
     ra = arr_init([0,]*3)
     rb = arr_init([1,]*3)
 
@@ -236,6 +284,8 @@ if __name__ == "__main__":
         (fone, am131, ra, 2*fone, am131, rb),
         (fone, am131, ra, 2*fone, s0, rb),
         (fone, am222, ra, 2*fone, am333, rb),
+        (fone, am444, ra, 2*fone, am333, rb),
+        (fone, am500, ra, 2*fone, am333, rb),
     ]
 
     test_data_stacks = list(zip(*test_data_list))
@@ -252,7 +302,52 @@ if __name__ == "__main__":
     for idx in range(len(test_data_list)):
         ans0 = overlap(*test_data_list[idx])
         ans1 = ans_ch[idx]
-        print(f"{idx:02d}\t{ans0.numpy()}\t{ans1.numpy()}\t{(ans0-ans1).numpy()}")
-       
+        perr = (ans0 - ans1) / ans0
+        print(f"{idx:02d}\t{ans0.numpy()}\t{ans1.numpy()}\t{perr}")
+
+
+    # shorthands for debugging
+    l0s, m0s, n0s = lmn0s[:,0], lmn0s[:,1], lmn0s[:,2]
+    l1s, m1s, n1s = lmn1s[:,0], lmn1s[:,1], lmn1s[:,2]
+    r12sqs = norm2(r0s-r1s, axis=1)
+    gammas = alpha0s + alpha1s
+    pcens = (alpha0s[:,None]*r0s + alpha1s[:,None]*r1s) / gammas[:,None]
+    pdiff0s = pcens - r0s
+    pdiff1s = pcens - r1s
+    px0s, px1s = pdiff0s[:,0], pdiff1s[:,1]
+
+    debug_var = 1
+
+
+    if False:
+        imax = 6
+        aas = [[] for _ in range(imax)]
+        bbs = [[] for _ in range(imax)]
+        for i in range(imax):
+            for r in range(int(floor(ione*i/2)+1)):
+                for u in range(int(floor((ione*i-2*r)/2)+1)):
+                    ii = i - 2*r - u
+                    istr=f"{ii}={i}-2*{r}-{u}"
+                    aas[i].append(istr)
+                    bbs[ii].append([i,r,u])
+                    print(istr)
+            print("="*10)
+        # bbs = np.asarray(bbs) # ragged
+
+
+    summx = (l0s + l1s).max()
+    ilim = int(ch.floor(0.5 * summx).item())
+    tmps = []
+    for i in ch.arange(1+ilim, device=device):
+        tmps += [binomial_prefactors_ch(2*i, l0s, l1s, px0s, px1s, opt=False),]
+    bp_ans = ch.stack(tmps).T
+
+    bps = binomial_prefactors_ch_all(l0s, l1s, px0s, px1s)
+
+
+
+ 
+
+
 
     debug_var = 1
