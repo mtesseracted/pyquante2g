@@ -194,16 +194,7 @@ def binomial_prefactors_ch(ll, l0s, l1s, px0s, px1s, opt=False):
 
 
 def binomial_prefactors_ch_all(l0s, l1s, px0s, px1s):
-    """
-    Vectorized over all ll in range(ilim+1),
-    where ilim = floor(0.5 * max(l0s + l1s)).
-
-    Inputs are batched 1D tensors (same length B):
-      l0s, l1s : integer tensors [B]
-      px0s, px1s : float tensors [B]
-
-    Returns:
-      ret : [B, ilim] with ret[:, ll] = binomial_prefactors_ch(ll, ...)
+    """ all valid binomial prefactors, batched
     """
     device = l0s.device
     summx = (l0s + l1s).max()
@@ -238,9 +229,6 @@ def binomial_prefactors_ch_all(l0s, l1s, px0s, px1s):
     # Sum over k → output [B, L]
     ret = term.sum(dim=-1)
     return ret #, ilim
-
-import torch as ch
-
 
 
 if __name__ == "__main__":
