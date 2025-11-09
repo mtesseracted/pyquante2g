@@ -59,6 +59,12 @@ def fboys(m, x):
     #  this formulation doesn't have correct limiting behavior at x=0, so clamp
     return 0.5 *  pow(xm, -mt) * gamma_inc(mt, xm)
 
+def fboys_ch(m, x): # stable @ x=0
+    m2 = m + 0.5*fone
+    ret = 0.5 *  pow(x, -m2) * gamma_inc(m2, x)
+    mask = x < ch.finfo(x.dtype).eps
+    ret[:] = ch.where(mask, 0.5/m2, ret)
+    return ret
 
 def binomial_prefactor(s,ia,ib,xpa,xpb):
     """
@@ -135,26 +141,59 @@ def gaussian_product_center_ch(alpha0s,r0s,alpha1s,r1s):
     return (alpha0s[:,None]*r0s[:,:] + alpha1s[:,None]*r1s[:,:]) / gammas[:,None]
 
 
+
+def sum_ax_ay_az_f_conv(ax: ch.Tensor, ay: ch.Tensor, az: ch.Tensor, f: ch.Tensor) -> ch.Tensor:
+    B, nx = ax.shape
+    _, ny = ay.shape
+    _, nz = az.shape
+
+    # Full length of 3-way convolution
+    L = nx + ny + nz - 2
+    m = min(f.size(1), L)
+
+    # First conv: ax * ay
+    x1 = ax.unsqueeze(0)                      # (1,B,nx)
+    w1 = ay.flip(-1).unsqueeze(1)             # (B,1,ny)  (flip for true convolution)
+    c1 = F.conv1d(x1, w1, groups=B, padding=ny-1) #.squeeze(0)  # (B, nx+ny-1)
+
+    # Second conv: (ax*ay) * az
+    # x2 = c1.unsqueeze(1)                      # (B,1,nx+ny-1)
+    w2 = az.flip(-1).unsqueeze(1)             # (B,1,nz)
+    c  = F.conv1d(c1, w2, groups=B, padding=nz-1).squeeze(0)  # (B, nx+ny+nz-2)
+
+    # Weighted sum with f
+    return (c[:, :m] * f[:, :m]).sum(dim=1)   # (B,)
+
+
+
 def nuclear_attraction_ch(alpha0s,lmn0s,r0s,alpha1s,lmn1s,r1s,Rns):
     """ Full form of the nuclear attraction integral """
 
     gammas = alpha0s + alpha1s
-    l0s, m0s, n0s = lmn0s[:,0], lmn0s[:,1], lmn0s[:,2]
-    l1s, m1s, n1s = lmn1s[:,0], lmn1s[:,1], lmn1s[:,2]
-    # px0s, px1s = pdiff0s[:,0], pdiff1s[:,1]
+    # l0s, m0s, n0s = lmn0s[:,0], lmn0s[:,1], lmn0s[:,2]
+    # l1s, m1s, n1s = lmn1s[:,0], lmn1s[:,1], lmn1s[:,2]
+    # # px0s, px1s = pdiff0s[:,0], pdiff1s[:,1]
 
     Ps = gaussian_product_center_ch(alpha0s,r0s,alpha1s,r1s)
     r01sqs = norm2(r0s-r1s, axis=1)
-    rnpsqs = norm2(Rns-Ps)
+    rnpsqs = norm2(Rns-Ps, axis=1)
+    dP0, dP1, dPn = Ps-r0s, Ps-r1s, Ps-Rns
 
-    dP0 = Ps - r0s
-    dP1 = Ps - r1s
-    dPn = Ps - Rns
+    Ax = A_array_ch(lmn0s[:,0], lmn1s[:,0], dP0[:,0], dP1[:,0], dPn[:,0], gammas)
+    Ay = A_array_ch(lmn0s[:,1], lmn1s[:,1], dP0[:,1], dP1[:,1], dPn[:,1], gammas)
+    Az = A_array_ch(lmn0s[:,2], lmn1s[:,2], dP0[:,2], dP1[:,2], dPn[:,2], gammas)
 
-    # Ax = A_array(l1,l2,dPA[0],dPB[0],dPC[0],gamma)
-    # Ay = A_array(m1,m2,dPA[1],dPB[1],dPC[1],gamma)
-    # Az = A_array(n1,n2,dPA[2],dPB[2],dPC[2],gamma)
+    totals = ch.zeros_like(gammas)
 
+    lmn_max = (lmn0s + lmn1s).sum(dim=1).max()
+    ijks = ch.arange(lmn_max+ione, dtype=lmn0s.dtype, device=lmn0s.device)
+    fboys_ijk = fboys_ch(ijks[None,:], (rnpsqs*gammas)[:,None]) # [B,ijks]
+
+    #@TODO: optimize by get Ay and Az in flipped form, then dont need
+    # to flip them in sum_ax_ay_az_f_conv()
+    totals = sum_ax_ay_az_f_conv(Ax, Ay, Az, fboys_ijk)
+    totals *= -2 * pi / gammas * exp(-alpha0s*alpha1s*r01sqs/gammas)
+    return totals
     # total = 0.
     # for I in range(l1+l2+1):
     #     for J in range(m1+m2+1):
@@ -222,8 +261,10 @@ def A_term_ch(i,r,u,l1,l2,PAx,PBx,CPx,gamma):
 def sign_parity_ch(t): # more efficient than pow(-1, t)
     return 1 - 2 * (t%2)
 
-def A_array_ch(l0s,l1s,px0s,px1s,pns,gs):
-    """ THO eq. 2.18 and 3.1 """
+def A_array_ch(l0s,l1s,px0s,px1s,pns,gs, flipi=False):
+    """ THO eq. 2.18 and 3.1 
+    flipi : flip the I index of the returned tensor (for efficient convolution)
+    """
     # return should be [B, imax]
     # local shapes are [B, imx, rmx, umx]
     typ, dev = gs.dtype, gs.device
@@ -355,6 +396,7 @@ if __name__ == "__main__":
     ansz = A_array_ch(lmn0s[:,2], lmn1s[:,2], dP0[:,2], dP1[:,2], dPn[:,2], gammas)
     preds = [ansx, ansy, ansz]
 
+    print("Relative errors in xyz for A_arrays")
     for idx in range(len(test_data_list)):
         perrs = [None]*3
         for ix in range(3):
@@ -364,7 +406,17 @@ if __name__ == "__main__":
             diff = gt_ans - preds[ix][idx,:len(gt_ans)].numpy()
             perrs[ix] = np.max(diff / np.clip(np.abs(gt_ans), 1.0e-12, None))
 
-        print(f"({idx}) :: " + " ".join("{:.6f}".format(float(p.squeeze())) for p in perrs))
+        print(f"({idx}) :: " + " ".join("{:.2e}".format(float(p.squeeze())) for p in perrs))
+    print()
+
+
+    ans_ch = nuclear_attraction_ch(alpha0s, lmn0s, r0s, alpha1s, lmn1s, r1s, Rns)
+
+    print("Relative errors for NAIs")
+    for idx in range(len(test_data_list)):
+        gt = nuclear_attraction(*test_data_list[idx], Rns[idx,:])
+        perr = (ans_ch[idx].item() - gt) / max(np.abs(gt), 1.0e-12)
+        print(f"({idx}) :: {perr:.2e}")
 
 
 
