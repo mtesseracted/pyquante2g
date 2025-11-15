@@ -7,6 +7,11 @@ from elements import element_symbols, element_masses, element_radii, element_col
 from utils.file_utils import read_xyz, read_mol, read_xyz_lines
 
 # shorthands for array / linear alg ops so they can be changed easily
+# Possible libraries that could be supported:
+# numpy, cupy, pytorch, tensorflow, jax
+# - dont make aliases for them all, just support numpy and 1 more,
+#   then put all the alias'd things in 1 file and users can change that
+# - need to alias full_like or maybe something new that can also take shape
 # try:
 #     import torch as ch
 #     arr_dtype = ch.float64
