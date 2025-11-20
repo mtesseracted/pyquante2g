@@ -137,7 +137,7 @@ def dfact2m1o2(n):
     return ch.exp(ch.lgamma(n + 0.5*fone)) / sqpi
 
 def overlap1d_ch2(l0s, l1s, px0s, px1s, gammas):
-    """ assume same numbers of 0s and 1s, and we need to calc the overlaps
+    """ assume same number of batches for 0s and 1s, and we need to calc the overlaps
     between them, so return is the same len as the ls, pdiffs, and gammas
     (PySEC pdist2 logic style for the distance func)
     """
@@ -195,6 +195,7 @@ def binomial_prefactors_ch(ll, l0s, l1s, px0s, px1s, opt=False):
 
 def binomial_prefactors_ch_all(l0s, l1s, px0s, px1s):
     """ all valid binomial prefactors, batched
+    ::WARN:: This one only calculates the evens!
     """
     device = l0s.device
     summx = (l0s + l1s).max()
