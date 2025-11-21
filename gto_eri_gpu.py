@@ -48,12 +48,12 @@ def binom_ch(n, i, round=True):
     # binom(n,k) == 0.0 for k > n
     ret = exp(th.lgamma(n+ione) - th.lgamma(i+ione) - th.lgamma(n-i+ione))
     if round: ret = th.round(ret)
-    return ret
+    return ret.to(dtype)
     
 def binom2_ch(n, i, round=True):
     ret = exp(th.lgamma(n+ione) - th.lgamma(i+ione) - th.lgamma(n-2*i+ione))
     if round: ret = th.round(ret)
-    return ret
+    return ret.to(dtype)
 
 def binomial_prefactor(s,ia,ib,xpa,xpb):
     """ The integral prefactor containing the binomial coefficients from Augspurger and Dykstra.
@@ -80,6 +80,17 @@ def H_array(l0, l1, a, b, g):
             ii = ia - 2*ir
             h_array[ii] += h_term(ia, ir, l0, l1, a, b, g)
     return h_array
+
+def H_array_full(l0, l1, a, b, g):
+    lmax = l0 + l1
+    h_array = np.zeros((lmax+1, lmax//2+1))
+    for ia in range(lmax+1):
+        for ir in range(ia//2 + 1):
+            # ii = ia - 2*ir
+            h_array[ia,ir] += h_term(ia, ir, l0, l1, a, b, g)
+    return h_array
+
+
 
 def c_term(l, m, u, hl, hm, px,):
     # d can be factored sin l+m-u == ii
@@ -134,9 +145,10 @@ class CartGtoPrim():
         pows = self.amom[:,None] - irng[None,:]
         # pows = th.where(pows > 0, pows, fzero)
         # @TODO possible optmization: if we invert sign of pows, could apply relu then reinvert
-        pows[pows<0] = fzero 
-        return th.pow((pab-self.cen)[:,None], pows) * \
+        pows[pows<0] = fzero.to(pows.dtype) # @TODO optimize relu
+        ret = th.pow((pab-self.cen)[:,None], pows) * \
             binom_ch(self.amom[:,None], irng[None,:])
+        return ret
 
     def calc_prod_binoms(self, other:"CartGtoPrim"):
         """ calculate binomial coefficents for the product of GTOs
@@ -251,21 +263,27 @@ class CartGtoPrimPair():
         # treat xyz as batch
         abinoms = self.ga.calc_binoms(self.pab)
         bbinoms = self.gb.calc_binoms(self.pab)
-        return F.conv_transpose1d( # tranpose1d does "full" mode
+        ret = F.conv_transpose1d( # tranpose1d does "full" mode
             abinoms[None,:,:], bbinoms[:,None,:],
             groups=abinoms.shape[0]
         ).squeeze(0)
+        return ret
 
-    def calc_h_array_gt(self) -> ArrType:
+    def calc_h_array_gt(self, full=False) -> ArrType:
         # BUG! H_array if from p-cen, not cen, look
         # at C_array
         pa = self.pab - self.ga.cen
         pb = self.pab - self.gb.cen
-        gts = [H_array(self.ga.amom[i].item(), self.gb.amom[i].item(),
-            pa[i].item(), pb[i].item(), self.gamma[i].item())
-            for i in range(len(self))]
-        szmx = max(len(gt) for gt in gts)
-        ret = np.stack([np.pad(gt, (0,szmx-len(gt))) for gt in gts])
+        if full:
+            ret = [H_array_full(self.ga.amom[i].item(), self.gb.amom[i].item(),
+                pa[i].item(), pb[i].item(), self.gamma[i].item())
+                for i in range(len(self))]
+        else:
+            gts = [H_array(self.ga.amom[i].item(), self.gb.amom[i].item(),
+                pa[i].item(), pb[i].item(), self.gamma[i].item())
+                for i in range(len(self))]
+            szmx = max(len(gt) for gt in gts)
+            ret = np.stack([np.pad(gt, (0,szmx-len(gt))) for gt in gts])
         return ret
 
     def calc_h_array(self) -> ArrType:
@@ -289,8 +307,49 @@ class CartGtoPrimPair():
         h_vals_flat *= binom2_ch(iflat, rflat)
         ret = th.zeros(full_sz[:2], dtype=dtype, device=device)
         ret.index_add_(1, iiflat, h_vals_flat)
+
+        # @DEBUG, compare to numpy calculated
+        hgt = th.as_tensor(self.calc_h_array_gt())
+        hgtf = self.calc_h_array_gt(full=True)
+
+        # get matching unrolled elements worse at ret[3,1], diff=7.1e-15
+        ibatch = 3
+        ii = 1
+        iflats = th.where(iiflat == ii)
+        these = h_vals_flat[ibatch][iflats]
+
+        ih = th.as_tensor(hgtf[ibatch])
+        iir = th.where((irng-2*rrng)[:ih.shape[0],:ih.shape[1]]==ii)
+        those = ih[iir]
+
+        irid = th.abs(these - those[:len(these)]).argmax() # not actual rr, place in iflats
+        i, r = iir[0][irid], iir[1][irid]
+
+        diff = these.sum() - those.sum()
+
+        factgt = binom2_ch(arr_init(i), arr_init(r))
+        fact = binom2_ch(iflat, rflat)[iflats[0][irid]]
+        diff = fact - factgt # 0.0
+        if diff != fzero:
+            debug_var = 1
+
+        pa = self.pab - self.ga.cen
+        pb = self.pab - self.gb.cen
+        bpgt = binomial_prefactor(i.item(), self.ga.amom[ibatch].item(), self.gb.amom[ibatch].item(),
+            pa[ibatch].item(), pb[ibatch].item())
+        diff = bps[ibatch,i] - arr_init(bpgt) # 0.0
+        if diff != fzero:
+            debug_var = 1
+
+        gpgt = np.pow(4*self.gamma[ibatch].item(), (r-i).item())
+        gp = th.pow(g4s[:,irmask], (rflat-iflat)[None,:])[ibatch,iflats[0][irid]]
+        diff = gp - gpgt
+        if diff != fzero:
+            debug_var = 1
+
+
         return ret
-    #end def calc_h_array_v2(self, other):
+    #end def calc_h_array(self, other):
 
 
     def calc_c_array_gt(self, other):
@@ -315,6 +374,8 @@ class CartGtoPrimPair():
     def calc_c_array(self, other:"CartGtoPrimPair") -> ArrType:
         # ga, gb, gc, gd = self.ga, self.gb, other.ga, other.gb
         hab, hcd = self.hab, other.hab
+        hab = th.as_tensor(self.calc_h_array_gt())
+        hcd = th.as_tensor(other.calc_h_array_gt())
         qp = other.pab - self.pab
         deltas = 0.25 * (fone/self.gamma + fone/other.gamma)
         abmax, cdmax = hab.shape[1]-1, hcd.shape[1]-1
@@ -331,7 +392,7 @@ class CartGtoPrimPair():
         iiflat = iirng[iumask]
         iuflat = iurng[iumask]
         uflat = urng.expand(*iumask.shape[:2], -1)[iumask]
-        facts = binom2_ch(iiflat+uflat, uflat)
+        facts = binom2_ch(iiflat+uflat, uflat) # float32
         parity = sign_parity_ch(cdrng+urng).expand(iumask.shape[0], -1, -1)[iumask]
 
         c_vals_flat = th.pow(qp[:,None], iuflat[None,:])
@@ -349,6 +410,9 @@ class CartGtoPrimPair():
         # h0 = th.as_tensor(self.calc_h_array_gt())
         # h1 = self.calc_h_array()
         # h0 = F.pad(h0, (0, h1.shape[1]-h0.shape[1]))
+        pdiffs = th.abs(ret - gts) / th.clamp(th.abs(gts), 1.0e-14, None)
+        pdab = th.abs(self.hab - hab) / th.clamp(th.abs(hab), 1.0e-14, None)
+        pdcd = th.abs(other.hab - hcd) / th.clamp(th.abs(hcd), 1.0e-14, None)
         # @DEBUG
 
         return ret
