@@ -288,7 +288,14 @@ if __name__ == "__main__":
     am131 = arr_init([1, 3, 1], dtype=np.int32)
     am444 = arr_init([4, 4, 4], dtype=np.int32)
     am333 = arr_init([3, 3, 3], dtype=np.int32)
+    am000 = arr_init([0, 0, 0], dtype=np.int32)
+    am100 = arr_init([1, 0, 0], dtype=np.int32)
+    am200 = arr_init([2, 0, 0], dtype=np.int32)
+    am300 = arr_init([3, 0, 0], dtype=np.int32)
+    am400 = arr_init([4, 0, 0], dtype=np.int32)
     am500 = arr_init([5, 0, 0], dtype=np.int32)
+    am600 = arr_init([6, 0, 0], dtype=np.int32)
+    am700 = arr_init([7, 0, 0], dtype=np.int32)
     ra = arr_init([0,]*3)
     rb = arr_init([0.1,]*3)
     fone = 1.0
@@ -350,5 +357,28 @@ if __name__ == "__main__":
     # program like psi4 and calculate some ERIs that way to make sure 
     # the pyquante2 implementation is correct
 
+    ra0 = ra
+    aone = fone
+    gto_raw_data = [
+        (am000, ra0, aone),
+        (am100, ra0, aone),
+        (am200, ra0, aone),
+        (am300, ra0, aone),
+        (am400, ra0, aone),
+        (am500, ra0, aone),
+        (am600, ra0, aone),
+        (am700, ra0, aone),
+    ]
 
-debug_var = 1
+    pq2_eris = []
+    for ii in range(len(gto_raw_data)):
+        ama, ra, aa = gto_raw_data[ii]
+        ans = coulomb_rep4(
+            aa, ama, ra, aa, ama, ra,
+            aa, ama, ra, aa, ama, ra,
+        )
+        pq2_eris.append(ans)
+        print(f"{ans:.15f}")
+
+
+    debug_var = 1

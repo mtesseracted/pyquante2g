@@ -3,6 +3,8 @@ import torch as th
 import torch.nn.functional as F
 import numpy as np # debugging
 
+from pq2_eri import coulomb_rep4
+
 # can we precompute terms for a basis func, e.g. the binomial terms
 # needed in binomial_prefactors so that when you compute them
 # later it's all dot products and einsums, no new computation
@@ -29,7 +31,10 @@ fone = arr_init(1.0)
 ione = arr_init(1, dtype=ityp)
 fzero = arr_init(0.0)
 izero = arr_init(0, dtype=ityp)
-irngmx = arange(ammax+2*ione)
+o4 = 0.25 * fone
+eri_fac = (2*fone) * pow(pi, 2.5*fone)
+# re-useable arrays
+irngmx = arange(6*ammax+1*ione) # 2 for pairs, 3 for 3d in ERI
 
 
 def factorial(n, round=True):
@@ -54,6 +59,22 @@ def binom2_ch(n, i, round=True):
     ret = exp(th.lgamma(n+ione) - th.lgamma(i+ione) - th.lgamma(n-2*i+ione))
     if round: ret = th.round(ret)
     return ret.to(dtype)
+
+
+def gamma_inc(a, x):
+    p = th.igamma(a, x) # regularized
+    ga = exp(th.lgamma(a))
+    return ga * p
+
+def fboys_ch(m, x): # stable @ x=0
+    m2 = m + 0.5*fone
+    ret = 0.5 *  pow(x, -m2) * gamma_inc(m2, x)
+    mask = x < th.finfo(x.dtype).eps
+    ret[:] = th.where(mask, 0.5/m2, ret) # @TODO: optimize for broadcasting with m and x being different sizes
+    # ret[mask.expand(-1,ret.shape[1])] = 0.5/m2.expand(ret.shape[0], -1)
+    return ret
+
+
 
 def binomial_prefactor(s,ia,ib,xpa,xpb):
     """ The integral prefactor containing the binomial coefficients from Augspurger and Dykstra.
@@ -307,47 +328,6 @@ class CartGtoPrimPair():
         h_vals_flat *= binom2_ch(iflat, rflat)
         ret = th.zeros(full_sz[:2], dtype=dtype, device=device)
         ret.index_add_(1, iiflat, h_vals_flat)
-
-        # @DEBUG, compare to numpy calculated
-        hgt = th.as_tensor(self.calc_h_array_gt())
-        hgtf = self.calc_h_array_gt(full=True)
-
-        # get matching unrolled elements worse at ret[3,1], diff=7.1e-15
-        ibatch = 3
-        ii = 1
-        iflats = th.where(iiflat == ii)
-        these = h_vals_flat[ibatch][iflats]
-
-        ih = th.as_tensor(hgtf[ibatch])
-        iir = th.where((irng-2*rrng)[:ih.shape[0],:ih.shape[1]]==ii)
-        those = ih[iir]
-
-        irid = th.abs(these - those[:len(these)]).argmax() # not actual rr, place in iflats
-        i, r = iir[0][irid], iir[1][irid]
-
-        diff = these.sum() - those.sum()
-
-        factgt = binom2_ch(arr_init(i), arr_init(r))
-        fact = binom2_ch(iflat, rflat)[iflats[0][irid]]
-        diff = fact - factgt # 0.0
-        if diff != fzero:
-            debug_var = 1
-
-        pa = self.pab - self.ga.cen
-        pb = self.pab - self.gb.cen
-        bpgt = binomial_prefactor(i.item(), self.ga.amom[ibatch].item(), self.gb.amom[ibatch].item(),
-            pa[ibatch].item(), pb[ibatch].item())
-        diff = bps[ibatch,i] - arr_init(bpgt) # 0.0
-        if diff != fzero:
-            debug_var = 1
-
-        gpgt = np.pow(4*self.gamma[ibatch].item(), (r-i).item())
-        gp = th.pow(g4s[:,irmask], (rflat-iflat)[None,:])[ibatch,iflats[0][irid]]
-        diff = gp - gpgt
-        if diff != fzero:
-            debug_var = 1
-
-
         return ret
     #end def calc_h_array(self, other):
 
@@ -374,8 +354,8 @@ class CartGtoPrimPair():
     def calc_c_array(self, other:"CartGtoPrimPair") -> ArrType:
         # ga, gb, gc, gd = self.ga, self.gb, other.ga, other.gb
         hab, hcd = self.hab, other.hab
-        hab = th.as_tensor(self.calc_h_array_gt())
-        hcd = th.as_tensor(other.calc_h_array_gt())
+        # hab = th.as_tensor(self.calc_h_array_gt()) # @DEBUG
+        # hcd = th.as_tensor(other.calc_h_array_gt()) # @DEBUG
         qp = other.pab - self.pab
         deltas = 0.25 * (fone/self.gamma + fone/other.gamma)
         abmax, cdmax = hab.shape[1]-1, hcd.shape[1]-1
@@ -404,22 +384,96 @@ class CartGtoPrimPair():
         tmp3 = th.pow(deltas[:,None], -irngmx[:lmax+2])
         ret *= tmp3
 
-        # @DEBUG
-        gts = th.as_tensor(self.calc_c_array_gt(other)) # @DEBUG
-        gts = F.pad(gts, (0, ret.shape[1]-gts.shape[1]))
-        # h0 = th.as_tensor(self.calc_h_array_gt())
-        # h1 = self.calc_h_array()
-        # h0 = F.pad(h0, (0, h1.shape[1]-h0.shape[1]))
-        pdiffs = th.abs(ret - gts) / th.clamp(th.abs(gts), 1.0e-14, None)
-        pdab = th.abs(self.hab - hab) / th.clamp(th.abs(hab), 1.0e-14, None)
-        pdcd = th.abs(other.hab - hcd) / th.clamp(th.abs(hcd), 1.0e-14, None)
-        # @DEBUG
-
         return ret
     #end def calc_c_array(self, other:"CartGtoPrimPair") -> ArrType:
- 
 
+
+    @staticmethod
+    def triple_conv_dot(ax:ArrType, ay:ArrType, az:ArrType, fxyz:ArrType, 
+        preflip:bool=False) -> ArrType:
+        """ ans[:] = sum_{i,j,k} ax[:,i] ay[:,j] az[:,k] fxyz[:,i+j+k]
+        preflip indicates whether az has been flipped along axis=1
+        """
+        B, nx = ax.shape
+        nz, nf = az.shape[1], fxyz.shape[1]
+
+        # ---- k = ay * az (true convolution) ----
+        # input: (1, B, ny), weight: (B, 1, nz), groups=B
+        w1 = (az if preflip else az.flip(-1)).unsqueeze(1)     # (B,1,nz)
+        x1 = ay.unsqueeze(0)                                   # (1,B,ny)
+        k  = F.conv1d(x1, w1, groups=B, padding=nz-1).squeeze(0)  # (B, ny+nz-1)
+        nk = k.size(1)
+
+        # ---- correlate f with k but compute only first nx outputs ----
+        need_len  = nx + nk - 1                 # f coverage needed for first nx outputs
+        take      = min(nf, need_len)
+        right_pad = need_len - take             # only pad on the right if short
+
+        x2 = fxyz[:, :take].unsqueeze(0)           # (1,B,take)
+        if right_pad:
+            x2 = F.pad(x2, (0, right_pad))      # asymmetric pad (left=0, right)
+        w2 = k.unsqueeze(1)                      # (B,1,nk)
+        c  = F.conv1d(x2, w2, groups=B).squeeze(0)   # (B, nx) exactly
+
+        # ---- final reduction (single-kernel dot) ----
+        return th.linalg.vecdot(ax, c, dim=1)   # (B,)
+    #end def triple_conv_dot()
+
+
+    def coulomb_rep(self, other) -> ArrType:
+        if len(self) != len(other):
+            raise ValueError("::ERR::(coulomb_rep) Batch size mismatch")
+        if len(self)%3 != 0:
+            raise ValueError("::ERR::(coulomb_rep) Batch size must be a multiple of 3")
+
+        gab, gcd = self.gamma[::3], other.gamma[::3]
+        bsz = len(self) // 3
+        tmp = th.empty(bsz)
+        c_array = self.calc_c_array(other).view(bsz,3,-1).transpose(0,1).contiguous()
+        delta = o4 / gab + o4 / gcd
+        qp2 = th.pow(self.pab-other.pab, 2*fone).reshape(-1,3).sum(axis=1)
+        fbx = o4 * qp2 / delta
+        ijkmax = 3 * c_array.shape[-1]
+        boys = fboys_ch(irngmx[:ijkmax+1][None,:], fbx[:,None])
+        ret = self.triple_conv_dot(c_array[0], c_array[1], c_array[2], boys)
+        del fbx, boys, 
+
+        aa, ab = self.ga.alpha[::3], self.gb.alpha[::3]
+        ac, ad = other.ga.alpha[::3], other.gb.alpha[::3]
+        ra, rb = self.ga.cen.view(bsz,3), self.gb.cen.view(bsz,3)
+        rc, rd = other.ga.cen.view(bsz,3), other.gb.cen.view(bsz,3)
+        rab2 = th.sum(th.square(ra-rb), dim=1)
+        rcd2 = th.sum(th.square(rc-rd), dim=1)
+
+        ret *= eri_fac / (gab*gcd*th.sqrt(gab+gcd))
+        ret *= exp(-aa*ab*rab2/gab)
+        ret *= exp(-ac*ad*rcd2/gcd)
+        return ret
 #end class CartGtoPrimPair():
+
+
+def sum_ax_ay_az_f_conv(ax, ay, az, f) -> ArrType:
+    B, nx = ax.shape
+    _, ny = ay.shape
+    _, nz = az.shape
+
+    # Full length of 3-way convolution
+    L = nx + ny + nz - 2
+    m = min(f.size(1), L)
+
+    # First conv: ax * ay
+    x1 = ax.unsqueeze(1)                      # (B,1,nx)
+    w1 = ay.flip(-1).unsqueeze(1)             # (B,1,ny)  (flip for true convolution)
+    c1 = F.conv1d(x1, w1, groups=B, padding=ny-1).squeeze(1)  # (B, nx+ny-1)
+
+    # Second conv: (ax*ay) * az
+    x2 = c1.unsqueeze(1)                      # (B,1,nx+ny-1)
+    w2 = az.flip(-1).unsqueeze(1)             # (B,1,nz)
+    c  = F.conv1d(x2, w2, groups=B, padding=nz-1).squeeze(1)  # (B, nx+ny+nz-2)
+
+    # Weighted sum with f
+    return (c[:, :m] * f[:, :m]).sum(dim=1)   # (B,)
+
 
 
 
@@ -432,15 +486,35 @@ if __name__ == "__main__":
     ra3 = arr_init([0.5,1.5,2.5])
     am000 = arr_init([0,0,0], dtype=ityp)
     am012 = arr_init([0,1,2], dtype=ityp)
+    am123 = arr_init([1,2,3], dtype=ityp)
+    am222 = arr_init([1,2,3], dtype=ityp)
+    am333 = arr_init([1,2,3], dtype=ityp)
     am454 = arr_init([4,5,5], dtype=ityp)
+    am100 = arr_init([1,0,0], dtype=ityp)
+    am200 = arr_init([2,0,0], dtype=ityp)
+    am300 = arr_init([3,0,0], dtype=ityp)
+    am400 = arr_init([4,0,0], dtype=ityp)
+    am500 = arr_init([5,0,0], dtype=ityp)
+    am600 = arr_init([6,0,0], dtype=ityp)
+    am700 = arr_init([7,0,0], dtype=ityp)
 
     gto_init_data = [
         (am000, ra0, fone),
-        (am000, ra1, 0.5*fone),
-        (am012, ra3, fone),
-        (am454, ra0, fone),
-        (am454, ra3, 0.1*fone),
-        (am454, ra2, 0.2*fone),
+        # (am000, ra1, 0.5*fone),
+        # (am012, ra3, fone),
+        # (am123, ra0, 2.2*fone),
+        # (am222, ra0, 2.2*fone),
+        # (am333, ra0, 2.2*fone),
+        # (am454, ra0, fone),
+        # (am454, ra3, 0.1*fone),
+        # (am454, ra2, 0.2*fone),
+        (am100, ra0, fone),
+        (am200, ra0, fone),
+        (am300, ra0, fone),
+        (am400, ra0, fone),
+        (am500, ra0, fone),
+        (am600, ra0, fone),
+        (am700, ra0, fone),
     ]
     gto_list = [CartGtoPrim(*args) for args in gto_init_data]
 
@@ -499,12 +573,49 @@ if __name__ == "__main__":
         debug_var = 1
         
 
-    gpair = CartGtoPrimPair(a, b)
+    gpair = CartGtoPrimPair(a, a)
     ctmp = gpair.calc_c_array(gpair)
     cgt = th.as_tensor(gpair.calc_c_array_gt(gpair))
-    cgt = F.pad(gts, (0, ctmp.shape[1]-gts.shape[1]))
+    cgt = F.pad(cgt, (0, ctmp.shape[1]-cgt.shape[1]))
+
+
+    result = gpair.coulomb_rep(gpair)
+
+    gp1, gp2 = gpair, gpair
+    gts = []
+    tmps = []
+    for ip in range(len(gp1)//3):
+        aa, ama, ra  = gp1.ga.alpha[3*ip], gp1.ga.amom[3*ip:3*ip+3], gp1.ga.cen[3*ip:3*ip+3]
+        ab, amb, rb  = gp1.gb.alpha[3*ip], gp1.gb.amom[3*ip:3*ip+3], gp1.gb.cen[3*ip:3*ip+3]
+        ac, amc, rc  = gp2.ga.alpha[3*ip], gp2.ga.amom[3*ip:3*ip+3], gp2.ga.cen[3*ip:3*ip+3]
+        ad, amd, rd  = gp2.gb.alpha[3*ip], gp2.gb.amom[3*ip:3*ip+3], gp2.gb.cen[3*ip:3*ip+3]
+        gt = coulomb_rep4(aa.numpy(), ama.numpy(), ra.numpy(), 
+                          ab.numpy(), amb.numpy(), rb.numpy(),
+                          ac.numpy(), amc.numpy(), rc.numpy(),
+                          ad.numpy(), amd.numpy(), rd.numpy(),)
+
+        gxa = CartGtoPrim(ama, ra, aa.tile(3))
+        gxb = CartGtoPrim(amb, rb, ab.tile(3))
+        gya = CartGtoPrim(amc, rc, ac.tile(3))
+        gyb = CartGtoPrim(amd, rd, ad.tile(3))
+        gx = CartGtoPrimPair(gxa, gxb)
+        gy = CartGtoPrimPair(gya, gyb)
+        tmps.append(gx.coulomb_rep(gy))
+        gts.append(gt)
+
+    tmps = th.stack(tmps).squeeze()
+    tgt = arr_init(np.stack(gts))
+
+    pdiffs = (tmps-tgt) / th.clamp(th.abs(tgt), 1.0e-15, None)
 
     # that that ctmp is slightly larger than cgt @ [0] says this is probably
     # a similar masking issue as we found when making calc_h_array
+
+    # penny lane answers (all self)
+    # pl_am500_a22 = 0.00013492516817825066 # am=(5,0,0), alpha=2.2
+    # pl_am700_a22 = 0.0004469882930051651  # am=(7,0,0), alpha=2.2
+
+    for r in result:
+        print(f"{r.item():.15f}")
 
     debug_var = 1
