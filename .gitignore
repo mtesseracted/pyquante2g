@@ -4,6 +4,7 @@
 .vscode/
 # build files
 __pycache__
+*.egg-info
 # data files
 *.xyz
 *.sdf

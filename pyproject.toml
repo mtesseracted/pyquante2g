@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["pyquante22"]
+
+[project]
+name = "pyquante22"
+version = "0.0.0"
+description = "vectorized pyquante2"
+authors = [{ name = "Aaron Mahler", email = "m.tesseracted@gmail.com" }]
+dependencies = [
+    "numpy",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+gpu = ["torch"]              # machine learning extras
+dev = ["pytest", "black"]   # development tools
+#docs = ["sphinx"]           # documentation tools

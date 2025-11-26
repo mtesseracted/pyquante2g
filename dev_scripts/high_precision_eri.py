@@ -1,18 +1,14 @@
 import sys
 import mpmath as mpm
 from fractions import Fraction
-import math
-from typing import Tuple, Optional, Union, Iterable, List
-import torch as th
+# import torch as th
+# th.set_default_dtype(th.float64)
 
-th.set_default_dtype(th.float64)
-
-mpm.mp.dps = 40 # decimal precision, rougly double float64
+mpm.mp.dps = 32 # decimal precision, rougly double float64
 # mpm.mp.prec = 53 # float64 mantissa
 meps = mpm.mpf(10)**mpm.mpf(-mpm.mp.dps)
-Number = Union[float, int]
 
-def frac_approx(n:Number, eps=1e-12):
+def frac_approx(n, eps=1e-12):
     return Fraction(n).limit_denominator(int(1.0/eps))
 
 def num2arb(n, eps=10*sys.float_info.epsilon):
@@ -220,7 +216,7 @@ if __name__ == "__main__":
         arb_eris.append(tmp)
 
     pt000 = 4.373354581906216
-    pt_eris = [
+    pt_eris = [ # results from the pytorch code
         4.373354581906216,
         0.223223306784796,
         0.116421448586877,
@@ -240,7 +236,7 @@ if __name__ == "__main__":
         print(f"({lmn}) %: {pdiff:.4e}")
 
 
-    pq2_eris = [
+    pq2_eris = [ # results pq2_eri.py
         4.373354581906216,
         0.223223304680411,
         0.116421444773967,
@@ -260,6 +256,17 @@ if __name__ == "__main__":
         print(f"({lmn}) %: {pdiff:.4e}")
 
 
+    pl_eris = [
+        199.65049087258498,
+    ]
+
+
+    print("="*40 + " PennyLane ERI % Errs " + "="*40)
+    pt = mpm.mpf(pl_eris[-1])
+    gt = arb_eris[-1]
+    pdiff = float((pt - gt) / gt)
+    lmn="7,0,0"
+    print(f"({lmn}) %: {pdiff:.4e}")
 
 
 
