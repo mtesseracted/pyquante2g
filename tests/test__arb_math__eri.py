@@ -79,7 +79,7 @@ def test_coloumb_rep4_cen0(digits_case):
         ans = arb.coulomb_rep4(*gn, *gs, *gs, *gs)
         assert mpm.almosteq(gt, ans)
 
-    cxp = [ # Cx for (ns|ss); n=range(8) (up to j-type)
+    cxp = [ # Cx for (ns|ps); n=range(8) (up to j-type)
         ['0/1', '0/1'],
         ['0/1', '1/4', '0/1'],
         ['0/1', '0/1', '0/1', '0/1'],

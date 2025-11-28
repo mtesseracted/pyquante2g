@@ -24,6 +24,7 @@ def test_binom2(digits_case):
     assert arb.binom2(1,2) == arb.arb(0)
     assert arb.binom2(2,1) == arb.arb(2)
     assert arb.binom2(4,2) == arb.arb(12)
+    assert arb.binom2(12,5) == arb.arb(1995840)
     
 
 def test_fboys(digits_case):
