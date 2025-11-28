@@ -1,43 +1,50 @@
+# implement helper functions and expose the basic math functions  needed
+# 
 import sys
 import mpmath as mpm
 from fractions import Fraction
 
-# __all__ = []
 
 mpm.mp.dps = 32 # decimal precision, rougly double float64
 # mpm.mp.prec = 53 # float64 mantissa
 
-
-def frac_approx(n, eps=1e-12):
+## Helper functions
+def frac_approx(n, eps=10*sys.float_info.epsilon):
     return Fraction(n).limit_denominator(int(1.0/eps))
 
 def num2arb(n, eps=10*sys.float_info.epsilon):
-    """ convert a number to arbitrary precision """
-    if isinstance(n, str):
-        return mpm.mpf(n)
+    """ convert a number to arbitrary precision 
+        it will convert things like 0.1, or float(1/3) to an mpfloat
+        while preserving the inferred rational value. Note if the 
+        number was exact up to the last bit in floating point,
+        this will probably convert it to an incorrect mpfloat value.
+    >>> num2arb(0.1) == mpm.mpf("0.1")
+    True
+    """
+    if isinstance(n, (str, mpm.mpf)):
+        # return mpm.mpf(n)
+        return mpm.mpmathify(n) # supports complex
     if isinstance(n, (float, int)):
         n = frac_approx(n, eps=eps)
     return mpm.mpf(n.numerator) / mpm.mpf(n.denominator)
 
 arb = lambda x: num2arb(x) # shorthand for num2arb
-# __all__.append("arb")
+arr_init = lambda x: mpm.matrix([arb(xx) for xx in x])
 
 def arange(*args):
     return range(*[int(mpm.nint(a)) for a in args])
-# __all__.append(arange)
 
 
-## pure math functions
+## Math functions
 nint = lambda *args, **kwargs: mpm.nint(*args, **kwargs)
 sqrt = lambda *args, **kwargs: mpm.sqrt(*args, **kwargs)
 exp = lambda *args, **kwargs: mpm.exp(*args, **kwargs)
-loggamma = lambda *args, **kwargs: mpm.loggamma(*args, **kwargs)
+lgamma = lambda *args, **kwargs: mpm.loggamma(*args, **kwargs)
 gammainc = lambda *args, **kwargs: mpm.gammainc(*args, **kwargs)
-binomial = lambda *args, **kwargs: mpm.binomial(*args, **kwargs)
-# __all__.extend([nint, sqrt, exp, loggamma, gammainc, binomial])
+binom = lambda *args, **kwargs: mpm.binomial(*args, **kwargs)
 
 
-## constants
+## Constants
 def set_constants():
     global eps, azero, aone, ahalf, pi
     azero = arb(0)
@@ -50,13 +57,10 @@ set_constants() # define first at import
 def set_dps(dps):
     mpm.mp.dps = dps
     set_constants()
-# __all__.append("set_dps")
 
 def set_prec(prec):
     mpm.mp.prec = prec
     set_constants()
-# __all__.append(set_dps)
-
 
 
 if __name__ == "__main__":

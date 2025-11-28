@@ -19,7 +19,7 @@
 if True: # this version is needed for dynamic updates to global constants
     from . import core as _core
     from . import functions as _funcs
-    # from . import eri as _eri
+    from . import eri as _eri
 
     # helper: all public callables in a module
     def _public_callables(mod):
@@ -31,12 +31,13 @@ if True: # this version is needed for dynamic updates to global constants
 
     _CORE_CALLABLES  = _public_callables(_core)
     _FUNCS_CALLABLES = _public_callables(_funcs)
-    # _ERI_CALLABLES = _public_callables(_eri)
+    _ERI_CALLABLES = _public_callables(_eri)
 
     # non-callable constants we still want to expose
     _EXTRA_CONSTANTS = {"pi", "eps", "azero", "aone", "ahalf"}
 
-    __all__ = sorted(_CORE_CALLABLES | _FUNCS_CALLABLES | _EXTRA_CONSTANTS)
+    __all__ = sorted(_CORE_CALLABLES | _FUNCS_CALLABLES | \
+                     _EXTRA_CONSTANTS | _ERI_CALLABLES)
 
 
     def __getattr__(name):
@@ -47,6 +48,10 @@ if True: # this version is needed for dynamic updates to global constants
         # callables from functions.py
         if name in _FUNCS_CALLABLES:
             return getattr(_funcs, name)
+
+        # callables from eri.py
+        if name in _ERI_CALLABLES:
+            return getattr(_eri, name)
 
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
