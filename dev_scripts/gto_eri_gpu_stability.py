@@ -11,7 +11,7 @@ ammax = 20
 ftyp = dtype
 ityp = th.int64
 ArrType = th.Tensor
-th.set_default_dtype(dtype)
+# th.set_default_dtype(dtype)
 
 # funcs
 pow = th.pow
@@ -49,18 +49,23 @@ def sign_parity_ch(t): # more efficient than pow(-1, t)?
 def binom_ch(n, i, round=True):
     # binom(n,i) = exp(lgamma(n+1) - lgamma(i+1) - lgamma(n-i+1))
     # binom(n,k) == 0.0 for k > n
-    ret = exp(th.lgamma(n+ione) - (th.lgamma(i+ione) + th.lgamma(n-i+ione)))
+    ret = exp(th.lgamma(n+fone) - (th.lgamma(i+fone) + th.lgamma(n-i+fone)))
     if round: ret = th.round(ret)
     return ret.to(dtype)
     
 def binom2_ch(n, i, round=True):
-    ret = exp(th.lgamma(n+ione) - (th.lgamma(i+ione) + th.lgamma(n-2*i+ione)))
+    # tmp1 = th.lgamma(n+ione)
+    # tmp2 = th.lgamma(i+ione)
+    # tmp3 = th.lgamma(n-2*i+ione)
+    # note: th.lgamma(int64) makes a float32
+    ret = exp(th.lgamma(n+fone) - (th.lgamma(i+fone) + th.lgamma(n-2*i+fone)))
     if round: ret = th.round(ret)
     return ret.to(dtype)
 
 def gamma_inc(a, x):
-    p = th.igamma(a, x) # regularized
-    ga = exp(th.lgamma(a))
+    at = a.to(dtype)
+    p = th.igamma(at, x) # regularized
+    ga = exp(th.lgamma(at))
     return ga * p
 
 def fboys_ch(m, x): # stable @ x=0
@@ -266,6 +271,8 @@ class CartGtoPrimPair():
         return ret
     #end def coulomb_rep(self, other) -> ArrType:
 #end class CartGtoPrimPair():
+
+tmp = binom2_ch(arr_init(12), arr_init(5))
 
 import arb_math as arb
 

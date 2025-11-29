@@ -26,6 +26,16 @@ def e256():
 def digits_case(request):
     return request.param
 
+def fact_exact(n:int): # use python's arbitrary int
+    if n < 2:
+        return 1
+    return n * fact_exact(n-1)
+
+def binom_exact(n:int, k:int): # use python's arbitrary int
+    if k > n:
+        return 0
+    return fact_exact(n) // (fact_exact(k) * fact_exact(n-k))
+
 
 def test_frac_approx():
     f = arb.frac_approx(1/2)
@@ -116,16 +126,68 @@ def test_gammainc(digits_case,):
         arb.gammainc(arb.arb(0.5)),
         arb.sqrt(arb.pi)
     )
+    # at s=0.5, lower==upper at x=erfinv(0.5)^2
+    # at s=1, lower==upper at x=log(2)
+    l2 = mpm.log(arb.arb(2))
+    assert mpm.almosteq(
+        arb.gammainc(1, 0, l2),
+        arb.gammainc(1, l2, None),
+    )
+    assert mpm.almosteq(
+        arb.gammainc(1, 0, l2),
+        arb.arb(0.5)
+    )
     a = arb.gammainc(2, 0, 1) + arb.gammainc(2, 1, 2)
     b = arb.gammainc(2, 0, 2)
     assert mpm.almosteq(a, b) # Gamma(x,a,b) + Gamma(x,b,c) == Gamma(x,a,c)
 
 
-def test_binom(digits_case):
+def test_binom_base(digits_case):
     arb.set_dps(digits_case)
     assert arb.binom(1,0) == arb.arb(1)
     assert arb.binom(0,1) == arb.arb(0)
     assert arb.binom(1,1) == arb.arb(1)
     assert arb.binom(4,4) == arb.arb(1)
     assert arb.binom(5,3) == arb.arb(10)
+
+def test_binom_large(digits_case):
+    arb.set_dps(digits_case)
+    test_nks = [
+        [4, 1],
+        [4, 2],
+        [4, 3],
+        [12, 4],
+        [12, 5],
+        [12, 6],
+        [12, 7],
+        [20, 0],
+        [20, 1],
+        [20, 2],
+        [20, 4],
+        [20, 8],
+        [20, 9],
+        [20, 10],
+        [20, 11],
+        [20, 19],
+        [20, 20],
+        [20, 21],
+        [40, 0],
+        [40, 1],
+        [40, 2],
+        [40, 4],
+        [40, 8],
+        [40, 16],
+        [40, 19],
+        [40, 20],
+        [40, 21],
+        [40, 39],
+        [40, 40],
+        [40, 41],
+    ]
+    for n,k in test_nks:
+        gt = str(binom_exact(n,k))
+        if len(gt) >= digits_case: continue # not enough precision
+        assert arb.binom(n,k) == arb.arb(gt), f"@{n},{k}"
+#end def test_binom_large(digits_case):
+
     
