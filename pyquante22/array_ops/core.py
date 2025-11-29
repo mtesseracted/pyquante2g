@@ -1,96 +1,179 @@
 # array_ops/core.py
-from typing import Protocol
+from itertools import combinations as _combinations
 
 
-class ArrayBackend(Protocol):
-    """Minimal interface every backend must support."""
+# ops that need to be implemented but have the same function signature (mostly)
+# across all backends, split them so they're easier to test
+math_ops_unary = [
+    "sqrt", "exp", "log",
+    "floor", "ceil", 
+]
+math_ops_binary = [
+    "pow", 
+]
+reduction_ops = [
+    "sum",
+    "amax", "amin",
+]
+# creation_ops = ["arange",]
+manipulation_ops = [
+    "reshape", "view",
+    "stack",
+]
+basic_ops = sum([
+    math_ops_unary, 
+    math_ops_binary,
+    reduction_ops,
+    # creation_ops,
+    manipulation_ops,
+], []) # concat lists
 
-    # existing
-    def init(self, data, dtype=None):
-        ...
-    def zeros(self, shape, dtype=None):
-        ...
-    def sum(self, x, axis=None, keepdims: bool = False):
-        ...
 
-    # new elementwise / math ops
-    def sqrt(self, x):
-        ...
-    def pow(self, x, y):
-        ...
-    def exp(self, x):
-        ...
-    def floor(self, x):
-        ...
+class ArrayBackend:
+    """
+    Base class specifying the full array API and default implementations.
 
-    # new creation / shape ops
-    def arange(self, start, stop=None, step=1, dtype=None):
-        ...
-    def stack(self, arrays, axis=0):
-        ...
+    Subclasses MUST set:
+        - self.xp   (the underlying array namespace, e.g. numpy, torch, cupy)
+        - self.name (string, e.g. 'numpy', 'torch', 'cupy')
 
-    # reductions / norms
-    def norm(self, x, axis=None, keepdims: bool = False):
-        ...
-    def amin(self, x, axis=None, keepdims: bool = False):
-        ...
-    def amax(self, x, axis=None, keepdims: bool = False):
-        ...
+    Subclasses MAY override methods to handle `self.device` in a
+    backend-specific way.
+    """
 
-    # conversion / combinatorics
+    xp = None           # imoprted backend module
+    name = "base"       # backend module name
+    ArrayType: type     # type for arrays
+
+    def __init__(self, device=None, 
+                 default_dtype=None, int_dtype=None,
+    ):
+        # Backend-specific interpretation of this is up to subclasses.
+        self.device = device
+        self.default_dtype = self._resolve_dtype(default_dtype)
+        self.int_dtype = self._resolve_dtype(int_dtype)
+
+    def _resolve_dtype(self, dtype):
+        if isinstance(dtype, str):
+            return getattr(self.xp, dtype)
+        return dtype
+
+    # ---------- conversion / creation ----------
+
     def tolist(self, x):
-        ...
-    def combinations(self, x, r: int):
-        ...
+        return x.tolist()
+
+    def asarray(self, data, dtype=None):
+        if dtype is None:
+            dtype = self.default_dtype
+        return self.xp.asarray(data, dtype=dtype)
+
+    def zeros(self, shape, dtype=None):
+        if dtype is None:
+            dtype = self.default_dtype
+        return self.xp.zeros(shape, dtype=dtype)
+
+    def arange(self, start, stop=None, step=1, dtype=None):
+        if dtype is None:
+            dtype = self.default_dtype
+        if stop is None:
+            return self.xp.arange(start, dtype=dtype)
+        return self.xp.arange(start, stop, step, dtype=dtype)
+
+    def init(self, data, dtype=None):
+        """Alias used by your public API."""
+        return self.asarray(data, dtype=dtype)
+    # ---------- reductions / norms ----------
+
+    def norm(self, x, axis=None, keepdims=False):
+        return self.xp.linalg.norm(x, axis=axis, keepdims=keepdims)
+
+    # ---------- combinatorics ----------
+
+    def combinations(self, x, r):
+        """
+        Default: build combinations on Python side, then convert back.
+        Backends can override to stay on-device / be faster.
+        """
+        seq = self.tolist(x)
+        combs = list(_combinations(seq, r))
+        return self.asarray(combs)
+#end class ArrayBackend:
+
+## add the basic ops to ArrayBackend here
+def _make_op(name):
+    def op(self, *args, **kwargs):
+        return getattr(self.xp, name)(*args, **kwargs)
+    op.__name__ = name
+    return op
+
+for _name in basic_ops:
+    setattr(ArrayBackend, _name, _make_op(_name))
 
 
-def _load_backend(name: str) -> ArrayBackend:
-    """Internal helper: import a backend by name."""
+# ---------- loader + multi-instance facade ----------
+
+def _load_backend(name,):
+    name = name.lower()
     if name == "numpy":
-        from .numpy import backend
-    elif name == "torch":
-        from .torch import backend
+        from . import numpy as m
+    elif name in ("torch", "pytorch"):
+        from . import torch as m
+    elif name == "cupy":
+        from . import cupy as m
     else:
-        raise ValueError(f"unknown backend {name!r}, expected 'numpy' or 'torch'")
-    return backend
+        raise ValueError(f"Unknown backend {name!r}")
+    return m.backend_cls()
 
 
 class ArrayOps:
     """
-    A handle that owns its own backend instance.
+    Per-instance facade that forwards every op to a chosen backend.
 
-    Example:
-        from array_ops import ArrayOps
+    backend can be:
+      - a string: 'numpy', 'torch', 'cupy'
+      - an already-constructed backend instance
 
-        ops1 = ArrayOps("numpy")
-        ops2 = ArrayOps("torch")
-
-        x = ops1.init([1, 2, 3])
-        y = ops2.init([1, 2, 3])
+    device: device where arrays will reside in memory
+    default_dtype: dtype for floats
+    int_dtype: dtype for ints
     """
+    def __init__(self, backend, device=None, 
+                 default_dtype=None, int_dtype=None):
 
-    def __init__(self, backend):
         self.set_backend(backend)
+        self.set_device(device)
+        self.set_dtype(default_dtype, int_dtype=int_dtype)
 
-    def set_backend(self, backend) -> None:
-        """backend can be a string name or an ArrayBackend instance."""
+    def set_backend(self, backend):
         if isinstance(backend, str):
             self._backend = _load_backend(backend)
+        elif isinstance(backend, ArrayBackend):
+            self._backend = backend
         else:
-            self._backend = backend  # assume it implements ArrayBackend
+            raise ValueError(f"Uknown backend type: {type(backend)}")
+
+    def set_device(self, device):
+        self._backend.device = device
+
+    def set_dtype(self, dtype, int_dtype=None):
+        self._backend.default_dtype = dtype
+        if int_dtype:
+            self._backend.int_dtype=int_dtype
 
     @property
-    def backend(self) -> ArrayBackend:
+    def backend(self):
         return self._backend
 
     @property
-    def backend_name(self) -> str:
+    def backend_name(self):
         return getattr(self._backend, "name", "<unknown>")
 
-    def __getattr__(self, name: str):
-        """
-        Forward attribute lookups (init, zeros, sum, sqrt, ...) to the backend.
+    @property
+    def device(self):
+        return getattr(self._backend, "device", None)
 
-        So ops.init(...) => ops.backend.init(...)
-        """
+    def __getattr__(self, name):
+        # Forward all ops (init, sqrt, sum, arange, combinations, …)
         return getattr(self._backend, name)
+#end class ArrayOps:

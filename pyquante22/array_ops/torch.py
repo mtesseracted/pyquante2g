@@ -1,102 +1,53 @@
 # array_ops/torch.py
-import torch
 
+import torch
 from .core import ArrayBackend
 
 
 class TorchBackend(ArrayBackend):
+    xp = torch
     name = "torch"
-    array_type = torch.Tensor
+    ArrayType = torch.Tensor
 
-    # --- core creation / reduction ---
+    def __init__(self, device="cpu", 
+                 default_dtype="float64", int_dtype="int64",):
+        super().__init__(device=device, 
+                         default_dtype=default_dtype, int_dtype=int_dtype)
 
-    def init(self, data, dtype=None) -> torch.Tensor:
-        return torch.as_tensor(data, dtype=dtype)
+    # Creation / conversion should honor self.device
 
-    def zeros(self, shape, dtype=None) -> torch.Tensor:
+    def asarray(self, data, dtype=None):
+        t = torch.as_tensor(data, dtype=dtype)
+        if self.device is not None:
+            return t.to(self.device)
+        return t
+
+    def zeros(self, shape, dtype=None):
+        if self.device is not None:
+            return torch.zeros(shape, dtype=dtype, device=self.device)
         return torch.zeros(shape, dtype=dtype)
 
-    def sum(
-        self,
-        x: torch.Tensor,
-        axis=None,
-        keepdims: bool = False,
-    ) -> torch.Tensor:
-        if axis is None:
-            return torch.sum(x)
-        return torch.sum(x, dim=axis, keepdim=keepdims)
-
-    # --- elementwise / math ---
-
-    def sqrt(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.sqrt(x)
-
-    def pow(self, x, y) -> torch.Tensor:
-        return torch.pow(x, y)
-
-    def exp(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.exp(x)
-
-    def floor(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.floor(x)
-
-    # --- creation / shape ops ---
-
-    # array_ops/torch.py
-
-    def arange(self, start, stop=None, step=1, dtype=None) -> torch.Tensor:
+    def arange(self, start, stop=None, step=1, dtype=None):
         if stop is None:
-            return torch.arange(0, start, step, dtype=dtype)
+            if self.device is not None:
+                return torch.arange(start, dtype=dtype, device=self.device)
+            return torch.arange(start, dtype=dtype)
+        if self.device is not None:
+            return torch.arange(start, stop, step, dtype=dtype, device=self.device)
         return torch.arange(start, stop, step, dtype=dtype)
 
-    def stack(self, arrays, axis=0) -> torch.Tensor:
-        return torch.stack(arrays, dim=axis)
+    def stack(self, arrays, axis=0):
+        # arrays should already be on the right device if created via this backend
+        return torch.stack(list(arrays), dim=axis)
 
-    # --- norms / reductions ---
-
-    def norm(
-        self,
-        x: torch.Tensor,
-        axis=None,
-        keepdims: bool = False,
-    ) -> torch.Tensor:
-        if axis is None:
-            return torch.linalg.norm(x)
-        return torch.linalg.norm(x, dim=axis, keepdim=keepdims)
-
-    def amin(
-        self,
-        x: torch.Tensor,
-        axis=None,
-        keepdims: bool = False,
-    ) -> torch.Tensor:
-        if axis is None:
-            return torch.amin(x)
-        return torch.amin(x, dim=axis, keepdim=keepdims)
-
-    def amax(
-        self,
-        x: torch.Tensor,
-        axis=None,
-        keepdims: bool = False,
-    ) -> torch.Tensor:
-        if axis is None:
-            return torch.amax(x)
-        return torch.amax(x, dim=axis, keepdim=keepdims)
-
-    # --- conversion / combinatorics ---
-
-    def tolist(self, x: torch.Tensor):
+    def tolist(self, x):
+        # Bring to CPU for safety
         return x.detach().cpu().tolist()
 
-    def combinations(self, x: torch.Tensor, r: int) -> torch.Tensor:
-        """
-        All r-combinations (no replacement) of a 1D tensor.
-
-        Returns a tensor of shape (n_combinations, r).
-        """
+    def combinations(self, x, r):
+        # torch.combinations keeps the input device
         x_flat = x.view(-1)
         return torch.combinations(x_flat, r=r)
 
 
-backend = TorchBackend()
+backend_cls = TorchBackend

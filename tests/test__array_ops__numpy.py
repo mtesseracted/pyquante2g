@@ -39,3 +39,38 @@ def test_array_ops_np_ops():
     assert cs.shape == (6,2)
 #end def test_array_ops_np_ops():
     
+
+def test_array_ops_np_unary():
+    arr.set_backend("numpy")
+    ops = arr.core.math_ops_unary
+    n = arr.arange(2.) + arr.init(1.)
+    for op in ops:
+        f = getattr(arr, op)
+        assert isinstance(f(n), np.ndarray), f"{op} not callable"
+
+def test_array_ops_np_binary():
+    arr.set_backend("numpy")
+    ops = arr.core.math_ops_unary
+    n = arr.arange(2.) + arr.init(1.)
+    for op in ops:
+        f = getattr(arr, op)
+        assert isinstance(f(n,n), np.ndarray), f"{op} not callable"
+
+def test_array_ops_np_reduction():
+    arr.set_backend("numpy")
+    ops = arr.core.reduction_ops
+    n = arr.arange(2.) + arr.init(1.)
+    for op in ops:
+        f = getattr(arr, op)
+        # assert callable(f), f"{op} not callable"
+        # @TODO need to set default dtype
+        assert isinstance(f(n), np.float64), f"{op} not callable"
+
+# def test_array_ops_np_manipulation():
+#     arr.set_backend("numpy")
+#     ops = arr.core.creation_ops
+#     for op in ops:
+#         f = getattr(arr, op)
+#         assert isinstance(f(2), np.ndarray), f"{op} not callable"
+
+
