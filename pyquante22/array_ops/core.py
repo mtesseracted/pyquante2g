@@ -15,27 +15,55 @@ class ArrayBackend(Protocol):
         ...
 
 
-_backend = None  # will hold the active backend instance
-
-
-def set_backend(name: str) -> None:
-    """Select which backend to use: 'numpy' or 'torch'."""
-    global _backend
-
+def _load_backend(name: str) -> ArrayBackend:
+    """Internal helper: import a backend by name."""
     if name == "numpy":
         from .numpy import backend
     elif name == "torch":
         from .torch import backend
     else:
         raise ValueError(f"unknown backend {name!r}, expected 'numpy' or 'torch'")
+    return backend
 
-    _backend = backend
 
+class ArrayOps:
+    """
+    A handle that owns its own backend instance.
 
-def get_backend() -> ArrayBackend:
-    """Return the active backend (must call set_backend() first)."""
-    if _backend is None:
-        raise RuntimeError(
-            "array_ops backend not set. Call set_backend('numpy') or set_backend('torch') first."
-        )
-    return _backend
+    Example:
+        from array_ops import ArrayOps
+
+        ops1 = ArrayOps("numpy")
+        ops2 = ArrayOps("torch")
+
+        x = ops1.init([1, 2, 3])
+        y = ops2.init([1, 2, 3])
+    """
+
+    def __init__(self, backend):
+        self.set_backend(backend)
+
+    def set_backend(self, backend) -> None:
+        """backend can be a string name or an ArrayBackend instance."""
+        if isinstance(backend, str):
+            self._backend = _load_backend(backend)
+        else:
+            # assume it already implements ArrayBackend
+            self._backend = backend
+
+    @property
+    def backend(self) -> ArrayBackend:
+        return self._backend
+
+    @property
+    def backend_name(self) -> str:
+        # optional convenience
+        return getattr(self._backend, "name", "<unknown>")
+
+    def __getattr__(self, name: str):
+        """
+        Forward attribute lookups (init, zeros, sum, ...) to the backend.
+
+        So ops.init(...) => ops.backend.init(...)
+        """
+        return getattr(self._backend, name)
