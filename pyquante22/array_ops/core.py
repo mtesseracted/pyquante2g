@@ -80,8 +80,10 @@ class ArrayBackend:
             return self.xp.arange(start, dtype=dtype)
         return self.xp.arange(start, stop, step, dtype=dtype)
 
+    # short-hands
     def init(self, data, dtype=None):
-        """Alias used by your public API."""
+        return self.asarray(data, dtype=dtype)
+    def arr(self, data, dtype=None):
         return self.asarray(data, dtype=dtype)
     # ---------- reductions / norms ----------
 
@@ -157,9 +159,9 @@ class ArrayOps:
         self._backend.device = device
 
     def set_dtype(self, dtype, int_dtype=None):
-        self._backend.default_dtype = dtype
+        self._backend.default_dtype = self._backend._resolve_dtype(dtype)
         if int_dtype:
-            self._backend.int_dtype=int_dtype
+            self._backend.int_dtype= self._backend._resolve_dtype(int_dtype)
 
     @property
     def backend(self):
@@ -172,6 +174,10 @@ class ArrayOps:
     @property
     def device(self):
         return getattr(self._backend, "device", None)
+
+    @property
+    def ArrayType(self):
+        return self._backend.ArrayType
 
     def __getattr__(self, name):
         # Forward all ops (init, sqrt, sum, arange, combinations, …)

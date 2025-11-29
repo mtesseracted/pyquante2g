@@ -28,6 +28,9 @@ class TorchBackend(ArrayBackend):
         return torch.zeros(shape, dtype=dtype)
 
     def arange(self, start, stop=None, step=1, dtype=None):
+        if dtype is None:
+            float_args = isinstance(start, float) or isinstance(stop, float) or isinstance(step, float)
+            dtype = self.default_dtype if float_args else self.int_dtype
         if stop is None:
             if self.device is not None:
                 return torch.arange(start, dtype=dtype, device=self.device)
