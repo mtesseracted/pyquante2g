@@ -1,4 +1,4 @@
-# Vector accelerated version of PyQuante
+# Vector accelerated version of PyQuante2
 
 ## Code structure
 - arb_math: arbitrary precision math, including ERIs
@@ -12,7 +12,7 @@
     - numpy:
     - tensorflow:
     - torch:
-- atoms: for representing moleculs
+- atoms: for representing molecules
     - elmements: atomisitic info
     - molecule: classes for building atoms
 - basis: basis set manipulations

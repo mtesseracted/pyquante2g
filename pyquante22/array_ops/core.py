@@ -5,13 +5,42 @@ from typing import Protocol
 class ArrayBackend(Protocol):
     """Minimal interface every backend must support."""
 
+    # existing
     def init(self, data, dtype=None):
         ...
-
     def zeros(self, shape, dtype=None):
         ...
-
     def sum(self, x, axis=None, keepdims: bool = False):
+        ...
+
+    # new elementwise / math ops
+    def sqrt(self, x):
+        ...
+    def pow(self, x, y):
+        ...
+    def exp(self, x):
+        ...
+    def floor(self, x):
+        ...
+
+    # new creation / shape ops
+    def arange(self, start, stop=None, step=1, dtype=None):
+        ...
+    def stack(self, arrays, axis=0):
+        ...
+
+    # reductions / norms
+    def norm(self, x, axis=None, keepdims: bool = False):
+        ...
+    def amin(self, x, axis=None, keepdims: bool = False):
+        ...
+    def amax(self, x, axis=None, keepdims: bool = False):
+        ...
+
+    # conversion / combinatorics
+    def tolist(self, x):
+        ...
+    def combinations(self, x, r: int):
         ...
 
 
@@ -48,8 +77,7 @@ class ArrayOps:
         if isinstance(backend, str):
             self._backend = _load_backend(backend)
         else:
-            # assume it already implements ArrayBackend
-            self._backend = backend
+            self._backend = backend  # assume it implements ArrayBackend
 
     @property
     def backend(self) -> ArrayBackend:
@@ -57,12 +85,11 @@ class ArrayOps:
 
     @property
     def backend_name(self) -> str:
-        # optional convenience
         return getattr(self._backend, "name", "<unknown>")
 
     def __getattr__(self, name: str):
         """
-        Forward attribute lookups (init, zeros, sum, ...) to the backend.
+        Forward attribute lookups (init, zeros, sum, sqrt, ...) to the backend.
 
         So ops.init(...) => ops.backend.init(...)
         """
