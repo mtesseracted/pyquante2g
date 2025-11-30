@@ -104,3 +104,4 @@ def test_array_ops_mixture(backend):
     assert cs.shape == (6,2)
 #end def test_array_ops_np_ops():
  
+# @TODO: get on a gpu machine and test 'device' is done correctly

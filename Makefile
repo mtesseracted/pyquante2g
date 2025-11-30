@@ -2,6 +2,8 @@
 
 .PHONY: clean install test
 
+reinstall: uninstall clean install
+
 # Remove Python build artifacts
 clean:
 	@echo "Cleaning up __pycache__ and *.egg-info..."

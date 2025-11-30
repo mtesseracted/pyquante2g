@@ -8,9 +8,9 @@
 - array_ops: interface for the vectorized backend
     - core: abstractions for interfacing with backends
     - cupy:
-    - jax:
+    <!-- - jax: -->
     - numpy:
-    - tensorflow:
+    <!-- - tensorflow: -->
     - torch:
 - atoms: for representing molecules
     - elmements: atomisitic info
