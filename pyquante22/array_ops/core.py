@@ -143,11 +143,11 @@ class ArrayOps:
     def __init__(self, backend, device=None, 
                  default_dtype=None, int_dtype=None):
 
-        self.set_backend(backend)
-        self.set_device(device)
-        self.set_dtype(default_dtype, int_dtype=int_dtype)
+        self.set_backend(backend, device=device, 
+                         default_dtype=default_dtype, int_dtype=int_dtype)
 
-    def set_backend(self, backend):
+    def set_backend(self, backend, device=None, 
+                    default_dtype=None, int_dtype=None):
         if isinstance(backend, str):
             self._backend = _load_backend(backend)
         elif isinstance(backend, ArrayBackend):
@@ -155,11 +155,18 @@ class ArrayOps:
         else:
             raise ValueError(f"Uknown backend type: {type(backend)}")
 
+        if device:
+            self.set_device(device)
+        if default_dtype or int_dtype:
+            self.set_dtype(default_dtype, int_dtype=int_dtype)
+    #end def set_backend()
+
     def set_device(self, device):
         self._backend.device = device
 
-    def set_dtype(self, dtype, int_dtype=None):
-        self._backend.default_dtype = self._backend._resolve_dtype(dtype)
+    def set_dtype(self, dtype=None, int_dtype=None):
+        if dtype:
+            self._backend.default_dtype = self._backend._resolve_dtype(dtype)
         if int_dtype:
             self._backend.int_dtype= self._backend._resolve_dtype(int_dtype)
 

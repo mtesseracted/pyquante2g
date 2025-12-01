@@ -24,10 +24,6 @@ from .core import ArrayBackend, ArrayOps
 _default_ops = ArrayOps("numpy")
 
 
-def set_backend(name: str) -> None:
-    _default_ops.set_backend(name)
-
-
 def get_default_ops() -> ArrayOps:
     return _default_ops
 

@@ -1,33 +1,39 @@
 import pytest
 import pyquante22.array_ops as arr
 import importlib
+from tests.array_ops.conftest import backend, ftype, INSTALLED_BACKENDS, FLOAT_TYPES
 
-@pytest.fixture(params=["numpy", "torch"])
-def backend(request):
-    return request.param
-
-@pytest.fixture(params=["float32", "float64"])
-def ftype(request):
-    return request.param
 
 def test_backend_init(backend, ftype):
-    ilib = importlib.import_module(backend)
+    m = importlib.import_module(backend)
+    mdtype = getattr(m, ftype, None)
+    if mdtype is None:
+        pytest.skip(f"No {ftype} in {backend}")
     arr.set_backend(backend)
     arr.set_dtype(ftype)
-    print(f"{getattr(ilib, ftype)}")
-    assert arr.default_dtype is getattr(ilib, ftype), f"{backend}@{ftype}"
+    assert arr.default_dtype is mdtype, f"{backend}@{ftype}"
+
 
 def test_multiple_instances():
-    nplib = importlib.import_module("numpy")
-    thlib = importlib.import_module("torch")
-    np64 = arr.ArrayOps("numpy", default_dtype="float64")
-    np32 = arr.ArrayOps("numpy", default_dtype="float32")
-    th64 = arr.ArrayOps("torch", default_dtype="float64")
-    th32 = arr.ArrayOps("torch", default_dtype="float32")
-    assert (np64.name == "numpy") and (np64.default_dtype is getattr(nplib, "float64"))
-    assert (np32.name == "numpy") and (np32.default_dtype is getattr(nplib, "float32"))
-    assert (th64.name == "torch") and (th64.default_dtype is getattr(thlib, "float64"))
-    assert (th32.name == "torch") and (th32.default_dtype is getattr(thlib, "float32"))
+    # create multiple instances simulatneously
+    aopss = {}
+    for backend in INSTALLED_BACKENDS:
+        m = importlib.import_module(backend)
+        for ftype in FLOAT_TYPES:
+            mdtype = getattr(m, ftype, None)
+            if mdtype is None: continue
+            aopss[(backend,ftype)] =arr.ArrayOps(backend, default_dtype=ftype)
+
+    # now check that those instances initialized correctly
+    # while all existing concurrently
+    for backend in INSTALLED_BACKENDS:
+        m = importlib.import_module(backend)
+        for ftype in FLOAT_TYPES:
+            mdtype = getattr(m, ftype, None)
+            if mdtype is None: continue
+            assert aopss[(backend,ftype)].name == backend
+            assert aopss[(backend,ftype)].default_dtype is mdtype
+#end def test_multiple_instances():
 
 
 def test_array_ops_basic(backend):
@@ -69,6 +75,7 @@ def test_array_ops_binary(backend):
         assert isinstance(fn, arr.ArrayType) and \
             (fn.dtype == arr.default_dtype), f"{op} not callable"
 
+
 def test_array_ops_reduction(backend):
     arr.set_backend(backend)
     ops = arr.core.reduction_ops
@@ -104,4 +111,3 @@ def test_array_ops_mixture(backend):
     assert cs.shape == (6,2)
 #end def test_array_ops_np_ops():
  
-# @TODO: get on a gpu machine and test 'device' is done correctly

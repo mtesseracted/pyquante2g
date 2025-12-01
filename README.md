@@ -24,3 +24,5 @@
 - utils: utility functions
     - file_utils: 
     - plotting_utils:
+
+@TODO: need to abstract the tensor.device method at least for tests

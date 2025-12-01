@@ -17,12 +17,14 @@ class TorchBackend(ArrayBackend):
     # Creation / conversion should honor self.device
 
     def asarray(self, data, dtype=None):
+        dtype = dtype if dtype else self.default_dtype
         t = torch.as_tensor(data, dtype=dtype)
         if self.device is not None:
             return t.to(self.device)
         return t
 
     def zeros(self, shape, dtype=None):
+        dtype = dtype if dtype else self.default_dtype
         if self.device is not None:
             return torch.zeros(shape, dtype=dtype, device=self.device)
         return torch.zeros(shape, dtype=dtype)
