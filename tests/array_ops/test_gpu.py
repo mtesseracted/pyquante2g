@@ -40,6 +40,7 @@ def test_init_devs(backend_gpu):
     assert a.dtype == arr.int_dtype
 #end def test_init_devs(backend_gpu):
 
+
 def test_array_ops_unary_gpu(backend_gpu):
     backend, dev = backend_gpu
     arr.set_backend(backend, device=dev)
@@ -47,6 +48,17 @@ def test_array_ops_unary_gpu(backend_gpu):
     n = arr.arange(2.) + arr.arr(1.)
     for op in ops:
         fn = getattr(arr, op)(n,)
+        assert isinstance(fn, arr.ArrayType) and \
+            (str(fn.device) == dev), f"{op} not callable"
+
+
+def test_array_ops_binary_gpu(backend_gpu):
+    backend, dev = backend_gpu
+    arr.set_backend(backend, device=dev)
+    ops = arr.core.math_ops_binary
+    n = arr.arange(2.) + arr.arr(1.)
+    for op in ops:
+        fn = getattr(arr, op)(n,n)
         assert isinstance(fn, arr.ArrayType) and \
             (str(fn.device) == dev), f"{op} not callable"
 

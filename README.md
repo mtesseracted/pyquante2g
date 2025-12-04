@@ -7,7 +7,7 @@
     - eri: implementation of THO's ERI
 - array_ops: interface for the vectorized backend
     - core: abstractions for interfacing with backends
-    - cupy:
+    <!-- - cupy: -->
     <!-- - jax: -->
     - numpy:
     <!-- - tensorflow: -->

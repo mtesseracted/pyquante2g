@@ -82,7 +82,7 @@ def load_gbs_file(filename):
 
 
 class BasisSet():
-    def __init__(self, molecule, name='sto3d', **kwargs):
+    def __init__(self, molecule, name='sto3g', **kwargs):
         self.bfs = []
         self.shells = []
         self.name = name.lower()

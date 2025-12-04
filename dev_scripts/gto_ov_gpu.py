@@ -334,9 +334,4 @@ if __name__ == "__main__":
     bps = binomial_prefactors_ch_all(l0s, l1s, px0s, px1s)
 
 
-
- 
-
-
-
     debug_var = 1

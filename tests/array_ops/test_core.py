@@ -37,6 +37,6 @@ def test_int_dtype(backend, itype,):
     m = importlib.import_module(backend)
     mdtype = getattr(m, itype, None)
     if mdtype is None:
-        pytest.skip(f"No {ftype} in {backend}")
+        pytest.skip(f"No {itype} in {backend}")
     opi = arr.ArrayOps(backend, int_dtype=itype)
     assert opi.int_dtype is mdtype

@@ -21,10 +21,10 @@ def itype(request):
 # Map nicknames to module names 
 CPU_BACKENDS = {"numpy": "numpy",}
 GPU_BACKENDS = {
-    "jax": "jax",
-    "cupy": "cupy",
+    # "jax": "jax",
+    # "cupy": "cupy",
     "torch": "torch",
-    "tensorflow": "tensorflow",
+    # "tensorflow": "tensorflow",
 }
 ALL_BACKENDS = {**CPU_BACKENDS, **GPU_BACKENDS}
 

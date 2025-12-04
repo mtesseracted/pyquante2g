@@ -5,20 +5,25 @@ from itertools import combinations as _combinations
 # ops that need to be implemented but have the same function signature (mostly)
 # across all backends, split them so they're easier to test
 math_ops_unary = [
-    "sqrt", "exp", "log",
+    "sqrt", "square",
+    "exp", "log",
+    "sin", "cos", "atan",
     "floor", "ceil", 
+    "lgamma",
 ]
 math_ops_binary = [
     "pow", 
+    "gamma_inc", # not regularized
 ]
 reduction_ops = [
-    "sum",
+    "sum", "prod",
     "amax", "amin",
 ]
 # creation_ops = ["arange",]
 manipulation_ops = [
     "reshape", "view",
-    "stack",
+    "stack", "where",
+    "broadcast_to", "tile",
 ]
 basic_ops = sum([
     math_ops_unary, 
@@ -43,7 +48,7 @@ class ArrayBackend:
 
     xp = None           # imoprted backend module
     name = "base"       # backend module name
-    ArrayType: type     # type for arrays
+    # ArrayType: type     # type for arrays
 
     def __init__(self, device=None, 
                  default_dtype=None, int_dtype=None,
@@ -184,9 +189,14 @@ class ArrayOps:
 
     @property
     def ArrayType(self):
-        return self._backend.ArrayType
+        return self.backend.ArrayType
 
     def __getattr__(self, name):
         # Forward all ops (init, sqrt, sum, arange, combinations, …)
-        return getattr(self._backend, name)
+        try: # @TODO this probably causes a performance penalty, not clean
+            # but maybe add the error string as the default val in getattr...
+            return getattr(self._backend, name)
+        except AttributeError:
+            raise AttributeError(f"The {self.backend.name} backend doesn't have {name}" + \
+                                 "\ntry adding to basic_ops in array_ops/core.py")
 #end class ArrayOps:

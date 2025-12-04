@@ -1,6 +1,7 @@
 # array_ops/torch.py
 
 import torch
+import torch.nn.functional as F
 from .core import ArrayBackend
 
 
@@ -54,5 +55,16 @@ class TorchBackend(ArrayBackend):
         x_flat = x.view(-1)
         return torch.combinations(x_flat, r=r)
 
+    def gamma_inc(self, a, x):
+        p = torch.igamma(a, x) # regularized
+        ga = torch.exp(torch.lgamma(a))
+        return ga * p
+
+    def conv_transpose1d(self, *args, **kwargs):
+        return torch.conv_transpose1d(*args, **kwargs)
+
+    def tile(self, x, n):
+        return torch.tile(x, dims=(n,))
+#end class TorchBackend(ArrayBackend):
 
 backend_cls = TorchBackend
