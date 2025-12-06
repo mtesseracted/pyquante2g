@@ -19,18 +19,23 @@ reduction_ops = [
     "sum", "prod",
     "amax", "amin",
 ]
-# creation_ops = ["arange",]
+creation_ops = ["eye",]
 manipulation_ops = [
-    "reshape", "view",
-    "stack", "where",
-    "broadcast_to", "tile",
+    "reshape", "view", "broadcast_to", 
+    "tile",
+    "stack", "concat",
+    "where", 
+]
+misc_ops = [
+    "unique", # is this a reduction?
 ]
 basic_ops = sum([
     math_ops_unary, 
     math_ops_binary,
     reduction_ops,
-    # creation_ops,
+    creation_ops,
     manipulation_ops,
+    misc_ops,
 ], []) # concat lists
 
 

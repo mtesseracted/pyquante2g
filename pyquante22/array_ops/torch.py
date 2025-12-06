@@ -55,6 +55,11 @@ class TorchBackend(ArrayBackend):
         x_flat = x.view(-1)
         return torch.combinations(x_flat, r=r)
 
+    def unique(self, x, **kwargs):
+        if 'axis' in kwargs:
+            kwargs['dim'] = kwargs.pop('axis')
+        return torch.unique(x, **kwargs)
+
     def gamma_inc(self, a, x):
         p = torch.igamma(a, x) # regularized
         ga = torch.exp(torch.lgamma(a))

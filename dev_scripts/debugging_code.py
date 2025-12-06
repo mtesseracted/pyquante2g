@@ -63,3 +63,51 @@ if False:
         pdcd = th.abs(other.hab - hcd) / th.clamp(th.abs(hcd), 1.0e-14, None)
         # @DEBUG
 
+
+## pretty print html for CartGtoPrim
+if False:
+    def html_row(self,table,i=0):
+        """
+        Add a row in a table for an html representation of an atom
+        """
+        import xml.etree.ElementTree as ET
+        i0, i1 = i*self.nd, (i+1)*self.nd
+        ll = ao.tolist(self.amom[i0:i1])
+        xx = ao.tolist(self.cen[i0:i1])
+        ee = self.alpha[i0].item()
+        tr = ET.SubElement(table,"tr")
+        td = ET.SubElement(tr,"td")
+        td.text = str(i)
+        for ii in range(self.nd):
+            td = ET.SubElement(tr,"td")
+            td.text = f"{ll[ii]}"
+        for ii in range(self.nd):
+            td = ET.SubElement(tr,"td")
+            td.text = f"{xx[ii]:8.2f}"
+        td = ET.SubElement(tr,"td")
+        td.text = f"{ee:8.2e}"
+        return
+
+    def html(self,tablehead=True):
+        import xml.etree.ElementTree as ET
+        top = ET.Element("p")
+        h2 = ET.SubElement(top,"h2")
+        h2.text = "Cartesian GTO Primitive (CartGtoPrim)"
+        p = ET.SubElement(top,"p")
+        p.text = f"Hash: {self.hash}"
+        table = ET.SubElement(top,"table")
+        if tablehead:
+            tr = ET.SubElement(table,"tr")
+            for item in ["#","Lx","Ly","Lz","Rx","Ry","Rz","Exp"]:
+                th = ET.SubElement(tr,"th")
+                th.text = item
+        for i in range(len(self)):
+            self.html_row(table,i)
+        return top
+
+    def _html_repr_(self,tablehead=True):
+        import xml.etree.ElementTree as ET
+        top = ET.Element("html")
+        top.append(self.html(tablehead=tablehead))
+        return ET.tostring(top)
+
