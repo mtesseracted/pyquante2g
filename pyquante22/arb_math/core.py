@@ -39,6 +39,7 @@ def arange(*args):
 nint = lambda *args, **kwargs: mpm.nint(*args, **kwargs)
 sqrt = lambda *args, **kwargs: mpm.sqrt(*args, **kwargs)
 exp = lambda *args, **kwargs: mpm.exp(*args, **kwargs)
+log = lambda *args, **kwargs: mpm.log(*args, **kwargs)
 lgamma = lambda *args, **kwargs: mpm.loggamma(*args, **kwargs)
 gammainc = lambda *args, **kwargs: mpm.gammainc(*args, **kwargs)
 binom = lambda *args, **kwargs: mpm.binomial(*args, **kwargs)

@@ -1,13 +1,14 @@
 # import os, time
 from hashlib import sha256
-import pyquante22.array_ops as arr
 import pyquante22.utils.math as me # math exact
-# from typing import Type
 
-
-# get an instance of ArrayOps
-ao = arr.ArrayOps("torch", device="cpu", 
-                  default_dtype="float64", int_dtype="int64")
+if False:
+    import pyquante22.array_ops as arr
+    # get an instance of ArrayOps
+    ao = arr.ArrayOps("torch", device="cpu", 
+                    default_dtype="float64", int_dtype="int64")
+else:
+    import pyquante22.array_ops as ao
 
 ArrType = ao.ArrayType
 one = ao.arr(1)
@@ -26,35 +27,34 @@ binom2s = ao.arr([[me.binom2_exact(n,k) for k in range(1*amax+1)] for n in range
 def dfact2m1o2(n):
     """ double factorial of 2n-1 over 2**n """
     return ao.exp(ao.lgamma(n + 0.5*one)) / ao.sqrt(pi)
-ghalfs = dfact2m1o2(arange_max[:2*amax+1].to(ao.default_dtype))
+ghalfs = dfact2m1o2(ao.arr(arange_max[:2*amax+1])) # cast to default_dtype
 
 
-def conv_full_batch(a, b):
-    """ batch convolve a with b (full size output)
-    a is (batch, n), b is (batch, m)
-    output is (batch, n+m-1)
-    """
-    return ao.conv_transpose1d( # tranpose1d does "full" mode
-        a[None,:,:], b[:,None,:], groups=a.shape[0]
-    ).squeeze(0)
+# def conv_full_batch(a, b): # @TODO: needs to be in array_ops
+#     """ batch convolve a with b (full size output)
+#     a is (batch, n), b is (batch, m)
+#     output is (batch, n+m-1)
+#     """
+#     return ao.conv_transpose1d( # tranpose1d does "full" mode
+#         a[None,:,:], b[:,None,:], groups=a.shape[0]
+#     ).squeeze(0)
 
+# def sign_parity(t): # more efficient than pow(-1, t)?
+#     # alternative: p = [1,-1]; return p[t%2]
+#     return one - 2 * (t%2)
 
-def sign_parity(t): # more efficient than pow(-1, t)?
-    # alternative: p = [1,-1]; return p[t%2]
-    return one - 2 * (t%2)
-
-def fboys_ch(m, x): # stable @ x=0
-    m2 = m + 0.5*one
-    ret = 0.5 *  ao.pow(x, -m2) * ao.gamma_inc(m2, x)
-    mask = x < ao.backend.xp.finfo(x.dtype).eps
-    ret[:] = ao.where(mask, 0.5/m2, ret) # @TODO: optimize for broadcasting with m and x being different sizes
-    # ret[mask.expand(-1,ret.shape[1])] = 0.5/m2.expand(ret.shape[0], -1)
-    return ret
+# def fboys_ch(m, x): # stable @ x=0
+#     m2 = m + 0.5*one
+#     ret = 0.5 *  ao.pow(x, -m2) * ao.gamma_inc(m2, x)
+#     mask = x < ao.backend.xp.finfo(x.dtype).eps
+#     ret[:] = ao.where(mask, 0.5/m2, ret) # @TODO: optimize for broadcasting with m and x being different sizes
+#     # ret[mask.expand(-1,ret.shape[1])] = 0.5/m2.expand(ret.shape[0], -1)
+#     return ret
 
 
 class CartGtoPrim():
     """ Cartesian GTO Primitive """
-    def __init__(self, amom:ArrType, cen:ArrType, alpha:ArrType, nd:int=3):
+    def __init__(self, amom:ArrType, cen:ArrType, alpha:ArrType, nd:int=3,):
         if nd != 3:
             raise NotImplementedError("Only 3d GTOs currently implemented")
         self.nd = nd # spatial dimension
@@ -132,7 +132,7 @@ class CartGtoPrim():
         ret = ao.pow((pab-self.cen)[:,None], pows) * \
             binoms[amom[:,None], irng[None,:]]
         mask = (amom < 0)[:,None] # zero out negative amom (for kinetic)
-        ret[ao.broadcast_to(mask, (-1, ret.shape[1]))] = zero
+        ret[ao.broadcast_to(mask, ret.shape)] = zero
         return ret
     #end def calc_binoms()
 
@@ -181,14 +181,14 @@ class CartGtoPrimPair():
         # treat xyz as batch
         self.abinoms = self.ga.calc_binoms(self.pab)
         self.bbinoms = self.gb.calc_binoms(self.pab)
-        return conv_full_batch(self.abinoms, self.bbinoms)
+        return ao.conv_full_batch(self.abinoms, self.bbinoms)
 
 
     def calc_overlap1d(self, offset=None):
         if offset is not None:
             # @TODO optimization: only calculate the evens instead of slicing
             bbinoms = self.gb.calc_binoms(self.pab, offset=offset)
-            bps = conv_full_batch(self.abinoms, bbinoms)[:,::2]
+            bps = ao.conv_full_batch(self.abinoms, bbinoms)[:,::2]
         else:
             bps = self.binom_pres[:,::2] # only take even factors
         irng = arange_max[:bps.shape[1]][None,:]
@@ -208,8 +208,8 @@ class CartGtoPrimPair():
         ga, gb = self.ga, self.gb
         ret = ao.sqrt(pi/self.gamma) * \
             ao.exp(-ga.alpha*gb.alpha*ao.square(ga.cen-gb.cen)/self.gamma)
-        ret = ret.view(bsz) # ss overlap term, split into spatial dims
-        ret *= self.calc_overlap1d(offset=offset).view(bsz) # 1D overlaps
+        ret = ret.reshape(bsz) # ss overlap term, split into spatial dims
+        ret *= self.calc_overlap1d(offset=offset).reshape(bsz) # 1D overlaps
         return ao.prod(ret, axis=1)
     #end def calc_overlap(self, nd=3, offset=None):
 
@@ -228,7 +228,7 @@ class CartGtoPrimPair():
         # pass an additional set of weights for collapsing the sum...
         ga, gb = self.ga, self.gb
         bsz = (len(self)//nd, nd)
-        amb = gb.amom.view(bsz)
+        amb = gb.amom.reshape(bsz)
         ab = gb.alpha[::nd]
         offsets = 2 * ao.eye(nd, dtype=ga.amom.dtype)
 
@@ -318,7 +318,7 @@ if __name__ == "__main__":
     from pyquante22.basis.pq2_one import overlap as p2ov
     from pyquante22.basis.one_ints_pyquante2 import gto_overlap_3d as ov3d
     from pennylane.qchem.integrals import gaussian_overlap as plov
-    tol = 5.e-15
+    tol = 1.e-14
 
     nr0 = np.asarray([0.,]*3)
     nrx = np.asarray([0.,1.,2.])

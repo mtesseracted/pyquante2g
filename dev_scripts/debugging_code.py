@@ -111,3 +111,46 @@ if False:
         top.append(self.html(tablehead=tablehead))
         return ET.tostring(top)
 
+# ...existing code...
+# array_ops instance is injected via set_array_ops() to allow arbitrary backends
+AO = None
+ArrType = None
+
+# module-level constants filled by set_array_ops()
+one = two = zero = half = pi = arange_max = binoms = binom2s = ghalfs = None
+amax = 20
+
+def set_array_ops(ao_inst):
+    """Register an array_ops instance for this module.
+    Call this once (or whenever you switch backend) before using CartGtoPrim.
+    """
+    global AO, ArrType, one, two, zero, half, pi, arange_max, binoms, binom2s, ghalfs, amax
+    AO = ao_inst
+    ArrType = AO.ArrayType
+    one = AO.arr(1)
+    two = AO.arr(2)
+    zero = AO.arr(0)
+    half = AO.arr(0.5)
+    pi = AO.arr(4) * AO.atan(one)
+    arange_max = AO.arange(6*amax+1)
+    # build precomputed combinatorics using existing `me` helpers in this module
+    binoms = AO.arr([[me.binom_exact(n, k) for k in range(2*amax+1)] for n in range(2*amax+1)])
+    binom2s = AO.arr([[me.binom2_exact(n, k) for k in range(1*amax+1)] for n in range(2*amax+1)])
+
+    def dfact2m1o2(n):
+        """ double factorial of 2n-1 over 2**n """
+        return AO.exp(AO.lgamma(n + 0.5*one)) / AO.sqrt(pi)
+
+    ghalfs = dfact2m1o2(arange_max[:2*amax+1])
+    globals()["ghalfs"] = ghalfs
+    globals()["binoms"] = binoms
+    globals()["binom2s"] = binom2s
+
+def _ensure_ao():
+    if AO is None:
+        raise RuntimeError("array_ops not set for cart_gto module. Call set_array_ops(my_ao) first.")
+
+def conv_full_batch(a, b):
+    _ensure_ao()
+    return AO.conv_transpose1d(a[None, :, :], b[:, None, :], groups=a.shape[0]).squeeze(0)
+# ...existing code...

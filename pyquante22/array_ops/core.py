@@ -84,8 +84,7 @@ class ArrayBackend:
         return self.xp.zeros(shape, dtype=dtype)
 
     def arange(self, start, stop=None, step=1, dtype=None):
-        if dtype is None:
-            dtype = self.default_dtype
+        # infer dtype from args if not given
         if stop is None:
             return self.xp.arange(start, dtype=dtype)
         return self.xp.arange(start, stop, step, dtype=dtype)
@@ -95,6 +94,7 @@ class ArrayBackend:
         return self.asarray(data, dtype=dtype)
     def arr(self, data, dtype=None):
         return self.asarray(data, dtype=dtype)
+
     # ---------- reductions / norms ----------
 
     def norm(self, x, axis=None, keepdims=False):
@@ -110,6 +110,12 @@ class ArrayBackend:
         seq = self.tolist(x)
         combs = list(_combinations(seq, r))
         return self.asarray(combs)
+
+    # ---------- other ----------
+
+    def conv_full_batch(self, a, b):
+        raise NotImplementedError("conv_full_batch not implemented for backend " + self.name)   
+
 #end class ArrayBackend:
 
 ## add the basic ops to ArrayBackend here

@@ -2,6 +2,7 @@ import pytest
 import pyquante22.arb_math as arb
 import mpmath as mpm
 
+pytestmark = pytest.mark.arb   # applies to all tests in this file
 
 # decimal digits of precision to test (approx because mpmath converts to bits)
 @pytest.fixture(params=[8, 16, 32, 64, 128])

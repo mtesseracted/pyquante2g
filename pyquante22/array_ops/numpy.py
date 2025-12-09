@@ -94,6 +94,11 @@ class NumpyBackend(ArrayBackend):
     def gamma_inc(self, a, x):
         return np.vectorize(_gamm_inc)(a, x)
 
+    def conv_full_batch(self, a, b):
+        return np.array([
+            np.convolve(sig, ker, mode='full') 
+            for sig, ker in zip(a, b)
+        ])
 #end class NumpyBackend(ArrayBackend):
 
 

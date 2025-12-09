@@ -3,14 +3,17 @@ import pyquante22.array_ops as arr
 from tests.array_ops.conftest import (
     INSTALLED_GPU_BACKENDS, AVAILABLE_GPUS, GPU_BACKENDS, backend_gpu)
 
-pytestmark = pytest.mark.skipif(
-    not INSTALLED_GPU_BACKENDS,
-    reason=f"No GPU backends found ({'/'.join(GPU_BACKENDS.values())})",
-)
-pytestmark = pytest.mark.skipif(
-    not AVAILABLE_GPUS,
-    reason=f"No GPUs found with {'/'.join(INSTALLED_GPU_BACKENDS) or 'any backend'}",
-)
+pytestmark = [
+    pytest.mark.gpu,
+    pytest.mark.skipif(
+        not INSTALLED_GPU_BACKENDS,
+        reason=f"No GPU backends found ({'/'.join(GPU_BACKENDS.values())})",
+    ),
+    pytest.mark.skipif(
+        not AVAILABLE_GPUS,
+        reason=f"No GPUs found with {'/'.join(INSTALLED_GPU_BACKENDS) or 'any backend'}",
+    ),
+]
 
 
 def test_inits(backend_gpu):

@@ -3,6 +3,8 @@ import pyquante22.arb_math as arb
 import mpmath as mpm
 from fractions import Fraction
 
+pytestmark = pytest.mark.arb   # applies to all tests in this file
+
 # 256 digits of pi from `bc -l <<< "scale=256; 4*a(1)"`
 @pytest.fixture
 def pi256():
