@@ -34,7 +34,8 @@ if True: # this version is needed for dynamic updates to global constants
     _ERI_CALLABLES = _public_callables(_eri)
 
     # non-callable constants we still want to expose
-    _EXTRA_CONSTANTS = {"pi", "eps", "azero", "aone", "ahalf"}
+    _EXTRA_CONSTANTS = {"ArbType",
+        "pi", "eps", "azero", "aone", "ahalf"}
 
     __all__ = sorted(_CORE_CALLABLES | _FUNCS_CALLABLES | \
                      _EXTRA_CONSTANTS | _ERI_CALLABLES)

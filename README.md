@@ -33,3 +33,6 @@
     - nai: nuclear attraction integral
 
 @TODO: need to abstract the tensor.device method at least for tests
+
+
+## References

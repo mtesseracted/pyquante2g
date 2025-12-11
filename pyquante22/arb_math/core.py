@@ -7,6 +7,7 @@ from fractions import Fraction
 
 mpm.mp.dps = 32 # decimal precision, rougly double float64
 # mpm.mp.prec = 53 # float64 mantissa
+ArbType = mpm.mpf
 
 ## Helper functions
 def frac_approx(n, eps=10*sys.float_info.epsilon):
@@ -30,6 +31,11 @@ def num2arb(n, eps=10*sys.float_info.epsilon):
 
 arb = lambda x: num2arb(x) # shorthand for num2arb
 arr_init = lambda x: mpm.matrix([arb(xx) for xx in x])
+# arr_init = lambda x: mpm.matrix(
+#     [[arb(v) for v in row] for row in x] if x and isinstance(x[0], (list, tuple))
+#     else [arb(xx) for xx in x]
+# ) # works for vectors and matrices
+
 
 def arange(*args):
     return range(*[int(mpm.nint(a)) for a in args])
@@ -38,8 +44,11 @@ def arange(*args):
 ## Math functions
 nint = lambda *args, **kwargs: mpm.nint(*args, **kwargs)
 sqrt = lambda *args, **kwargs: mpm.sqrt(*args, **kwargs)
+square = lambda x: x*x
+pow = lambda x, y: x ** y
 exp = lambda *args, **kwargs: mpm.exp(*args, **kwargs)
 log = lambda *args, **kwargs: mpm.log(*args, **kwargs)
+gamma = lambda *args, **kwargs: mpm.gamma(*args, **kwargs)
 lgamma = lambda *args, **kwargs: mpm.loggamma(*args, **kwargs)
 gammainc = lambda *args, **kwargs: mpm.gammainc(*args, **kwargs)
 binom = lambda *args, **kwargs: mpm.binomial(*args, **kwargs)

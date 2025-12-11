@@ -6,6 +6,12 @@ from pyquante22.ref_ints.utils import GTO, arange_max, binoms, binom2s
 from pyquante22.ref_ints.utils import norm2, gaussian_product_center, binomial_prefactor
 
 
+##############################################################################
+# Hiroshi Taketa, Sigeru Huzinaga, Kiyoshi O-ohata, 1966 (THO66)
+# https://doi.org/10.1143/JPSJ.21.2313
+##############################################################################
+
+
 def h_term(ii, rr, l0, l1, a, b, g):
     return binom2s[ii,rr] * binomial_prefactor(ii,l0,l1,a,b,) * np.pow(4*g,rr-ii)
 

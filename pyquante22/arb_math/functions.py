@@ -20,6 +20,49 @@ def binom2(n, i, round=True):
     if round: ans = core.nint(ans)
     return ans
 
+def binom22(i,r,u, round=True):
+    """ i! / (r! u! (i-2(r+u))!) 
+    if all inputs are int, the result should be int so round can correct errors
+    proof: multiply out b(i,r)b(i-r,r)b(i-2r,u)b(i-2r-u,u) where b(n,k) is biomial
+    and you get binom22() times r!u!, so clearly int.
+    """
+    if 2*(r+u) > i: return core.azero
+    tmp = core.lgamma(i+core.aone)
+    tmp -= core.lgamma(r+core.aone) + core.lgamma(u+core.aone) + \
+        core.lgamma(i-2*(r+u)+core.aone)
+    ans = core.exp(tmp)
+    if round: ans = core.nint(ans)
+    return ans
+
+
+def gamma_half_int(n):
+    """ compute Gamma(n + 1/2) /sqrt(pi) == (2n-1)!! / 2^n """
+    return core.gamma(n + core.ahalf) / core.sqrt(core.pi)
+
+
+# def binomial_prefactor(s,ia,ib,xpa,xpb):
+#     """ The integral prefactor containing the binomial coefficients
+#     """
+#     total= 0
+#     for t in core.arange(s-ia, ib+1):
+#         total +=  core.binom(ia,s-t) * core.binoms(ib,t)* \
+#                     (xpa **(ia-s+t)) * (xpb **(ib-t))
+#     return total
+# def gaussian_product_center(alpha1,A,alpha2,B):
+#     return (alpha1*A+alpha2*B)/(alpha1+alpha2)
+
+
+def gto_prod_cen(aa, ra, ab, rb):
+    return (aa*ra + ab*rb) / (aa+ab)
+
+
+def binom_pre(s, ia, ib, xpa, xpb):
+    total = core.arb(0)
+    for t in core.arange(s-ia, ib+core.aone):
+        total += core.binom(ia,s-t) * core.binom(ib,t) * \
+            (xpa ** (ia-s+t)) * (xpb ** (ib-t))
+    return total
+
 
 def fboys(m, x):
     """ boys function """

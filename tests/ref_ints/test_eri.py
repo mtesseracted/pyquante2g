@@ -57,7 +57,7 @@ def test_eri_even_odd():
             for eri in eri_funcs:
                 result = eri(godd, g0, geve, g0)
                 assert result == 0.0
-#end def test_coloumb_rep4_even_odd(digits_case):
+#end def test_eri_even_odd():
 
 
 @pytest.mark.med

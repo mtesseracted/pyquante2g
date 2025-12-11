@@ -7,16 +7,8 @@ except ImportError:
     import functions as f
 
 
-def binom_pre(s, ia, ib, xpa, xpb):
-    total = core.arb(0)
-    for t in core.arange(s-ia, ib+core.aone):
-        total += core.binom(ia,s-t) * core.binom(ib,t) * \
-            (xpa ** (ia-s+t)) * (xpb ** (ib-t))
-    return total
-
-
 def h_term(ii, rr, l0, l1, a, b, g):
-    return f.binom2(ii,rr) * binom_pre(ii,l0,l1,a,b) * (4*g)**(rr-ii)
+    return f.binom2(ii,rr) * f.binom_pre(ii,l0,l1,a,b) * (4*g)**(rr-ii)
 
 def H_array(l0, l1, a, b, g):
     lmax = l0 + l1
@@ -52,10 +44,6 @@ def C_array(l0, l1, l2, l3, px0, px1, qx2, qx3, qpx, g1, g2):
 #end def C_array()
 
 
-def gto_prod_cen(aa, ra, ab, rb):
-    return (aa*ra + ab*rb) / (aa+ab)
-
-
 def coulomb_rep4(
     alphaa, lmna, xyza,
     alphab, lmnb, xyzb,
@@ -75,9 +63,9 @@ def coulomb_rep4(
 
     rab2 = f.norm2(xyza-xyzb)
     rcd2 = f.norm2(xyzc-xyzd)
-    xyzp = gto_prod_cen(alphaa,xyza,alphab,xyzb)
+    xyzp = f.gto_prod_cen(alphaa,xyza,alphab,xyzb)
     xp,yp,zp = xyzp
-    xyzq = gto_prod_cen(alphac,xyzc,alphad,xyzd)
+    xyzq = f.gto_prod_cen(alphac,xyzc,alphad,xyzd)
     xq,yq,zq = xyzq
     rpq2 = f.norm2(xyzp-xyzq)
     gamma1 = alphaa+alphab
