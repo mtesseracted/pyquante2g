@@ -19,6 +19,8 @@
 if True: # this version is needed for dynamic updates to global constants
     from . import core as _core
     from . import functions as _funcs
+    from . import overlap as _ov
+    from . import nai as _nai
     from . import eri as _eri
 
     # helper: all public callables in a module
@@ -31,6 +33,8 @@ if True: # this version is needed for dynamic updates to global constants
 
     _CORE_CALLABLES  = _public_callables(_core)
     _FUNCS_CALLABLES = _public_callables(_funcs)
+    _OV_CALLABLES = _public_callables(_ov)
+    _NAI_CALLABLES = _public_callables(_nai)
     _ERI_CALLABLES = _public_callables(_eri)
 
     # non-callable constants we still want to expose
@@ -38,7 +42,8 @@ if True: # this version is needed for dynamic updates to global constants
         "pi", "eps", "azero", "aone", "ahalf"}
 
     __all__ = sorted(_CORE_CALLABLES | _FUNCS_CALLABLES | \
-                     _EXTRA_CONSTANTS | _ERI_CALLABLES)
+                     _EXTRA_CONSTANTS | _OV_CALLABLES | \
+                     _NAI_CALLABLES | _ERI_CALLABLES )
 
 
     def __getattr__(name):
@@ -49,6 +54,14 @@ if True: # this version is needed for dynamic updates to global constants
         # callables from functions.py
         if name in _FUNCS_CALLABLES:
             return getattr(_funcs, name)
+
+        # callables from overlap.py
+        if name in _OV_CALLABLES:
+            return getattr(_ov, name)
+
+        # callables from nai.py
+        if name in _NAI_CALLABLES:
+            return getattr(_nai, name)
 
         # callables from eri.py
         if name in _ERI_CALLABLES:

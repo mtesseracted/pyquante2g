@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import numpy as np
 from pyquante22.utils.math import binom_exact, binom2_exact, gamma_half_int
 
@@ -17,8 +17,12 @@ class GTO:
             return self.a
         raise IndexError("GTO only has 3 fields")
 
+    def clone(self, **kwargs):
+        return replace(self, **kwargs)
+
+    # below are all the possible return orders for intercompatabilty
     @property
-    def lra(self):
+    def lra(self): # used by pennylane(interleaved)@(overlap,kinetic,nai,eri)
         return self.l, self.r, self.a
     
     @property
@@ -26,11 +30,11 @@ class GTO:
         return self.l, self.a, self.r
     
     @property
-    def alr(self):
+    def alr(self): # used by pyquante2@(overlap,kinetic,nai),
         return self.a, self.l, self.r
 
     @property
-    def arl(self):
+    def arl(self): # used by: HH12(interleaved)@overlap,
         return self.a, self.r, self.l
 
     @property
@@ -38,7 +42,7 @@ class GTO:
         return self.r, self.a, self.l
     
     @property
-    def rla(self):
+    def rla(self): # used by: gbasis@all, pyquante2@eri,
         return self.r, self.l, self.a
 #end class GTO:
 

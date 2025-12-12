@@ -1,4 +1,5 @@
 import numpy as np
+from pyquante22.ref_ints.utils import GTO
 
 ##############################################################################
 # Minhhuy Hô and Julio-Manuel Hernández-Pérez, 2012 (hh12)
@@ -40,7 +41,8 @@ def overlap1d_hh12(amom, bmom, acen, bcen, alp, bet) -> float:
 #end def overlap1d_hh12(amom, bmom, acen, bcen, alp, bet):
 
 
-def overlap_hh12(alpha, beta, acen, bcen, amom, bmom):
+# def overlap_hh12(alpha, beta, acen, bcen, amom, bmom):
+def overlap_hh12(ga:GTO, gb:GTO):
     r""" Compute overlap of 3D Gaussians with angular momentum indices.
     ----------
     amom, bmom : angular momentum indices 
@@ -49,6 +51,8 @@ def overlap_hh12(alpha, beta, acen, bcen, amom, bmom):
     -------
     return : float, scalar overlap
     """
+    alpha, acen, amom = ga.arl
+    beta, bcen, bmom = gb.arl
 
     # Pre-factor terms
     r1 = (alpha * beta) / (alpha + beta)
@@ -65,7 +69,8 @@ def overlap_hh12(alpha, beta, acen, bcen, amom, bmom):
 #end def overlap_hh12(alpha, beta, acen, bcen, amom, bmom):
 
 
-def kinetic_hh12(alpha, beta, acen, bcen, amom, bmom) -> float:
+#def kinetic_hh12(alpha, beta, acen, bcen, amom, bmom) -> float:
+def kinetic_hh12(ga:GTO, gb:GTO):
     r""" Compute kinetic expections of 3D Cartesian Gaussians
     ----------
     amom, bmom : angular momentum indices 
@@ -81,23 +86,27 @@ def kinetic_hh12(alpha, beta, acen, bcen, amom, bmom) -> float:
     # !                              + g_x * g_y * g''_z
     # ! This means we need to iterate 3 times
     # ! this method double calculates all the non-derivative overlaps!
+    alpha, acen, amom = ga.arl
+    beta, bcen, bmom = gb.arl
+    gc = ga.clone(l=np.copy(ga.l))
+    offs = 2 * np.eye(3, dtype=gc.l.dtype)
 
-    a1 = np.zeros_like(amom)
-    a2 = bmom
+    term0 = term1 = term2 = 0.0
     ret = 0.0
     for ii in range(3):              #! loop over which coord is 2nd deriv
 
-        a1[:] = amom[:]
-        ov_n = overlap_hh12(alpha, beta, acen, bcen, a1, a2)
-        a1[ii] = amom[ii] + 2
-        ov_np2 = overlap_hh12(alpha, beta, acen, bcen, a1, a2)
+        ov_n = overlap_hh12(gc, gb) #alpha, beta, acen, bcen, a1, a2)
+        gc.l += offs[ii]
+        ov_np2 = overlap_hh12(gc, gb) #alpha, beta, acen, bcen, a1, a2)
+        gc.l -= offs[ii] # reset
 
         ret = ret - alpha * float(2*(2*amom[ii]+1)) * ov_n 
         ret = ret + 4.0 * alpha * alpha * ov_np2
 
         if ( amom[ii] > 1 ):
-            a1[ii] = amom[ii] - 2
-            ov_nm2 = overlap_hh12(alpha, beta, acen, bcen, a1, a2)
+            gc.l -= offs[ii]
+            ov_nm2 = overlap_hh12(gc, gb) #alpha, beta, acen, bcen, a1, a2)
+            gc.l += offs[ii] # reset
             ret = ret + float(amom[ii]*(amom[ii]-1)) * ov_nm2 
 
     ret = -0.5 * ret  #!  kinetic = -1/2 \nabla^2

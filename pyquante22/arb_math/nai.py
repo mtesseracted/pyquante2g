@@ -16,8 +16,8 @@ def A_term(i,r,u,l1,l2,PAx,PBx,CPx,gamma):
 def A_array(l1,l2,PA,PB,CP,g):
     """ THO eq. 2.18 and 3.1 """
     Imax = l1+l2+1
-    A = core.arr_init([0]*Imax)
-    for i in range(Imax):
+    A = core.arr_init([0]*int(Imax))
+    for i in core.arange(Imax):
         for r in range(int(core.floor(i/2)+1)):
             for u in range(int(core.floor((i-2*r)/2)+1)):
                 I = i-2*r-u
@@ -44,12 +44,21 @@ def nuclear_attraction(alpha1,lmn1,A,alpha2,lmn2,B,C):
     Az = A_array(n1,n2,dPA[2],dPB[2],dPC[2],gamma)
 
     total = 0.
-    for I in range(l1+l2+1):
-        for J in range(m1+m2+1):
-            for K in range(n1+n2+1):
+    for I in core.arange(l1+l2+1):
+        for J in core.arange(m1+m2+1):
+            for K in core.arange(n1+n2+1):
                 total += Ax[I]*Ay[J]*Az[K]*f.fboys(I+J+K,rcp2*gamma)
                 
     val= -2*core.pi/gamma*core.exp(-alpha1*alpha2*rab2/gamma)*total
     return val
 #end def nuclear_attraction(alpha1,lmn1,A,alpha2,lmn2,B,C):
 
+
+if __name__ == "__main__":
+    arb = core
+    ra0 = arb.arr_init([0,]*3)
+    am000 = arb.arr_init([0,0,0])
+    g0 = [arb.aone, am000, ra0]
+    ans0 = nuclear_attraction(*sum([g0,]*2, []), ra0)
+    debug_var = 1
+ 

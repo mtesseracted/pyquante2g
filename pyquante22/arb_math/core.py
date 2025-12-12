@@ -42,6 +42,8 @@ def arange(*args):
 
 
 ## Math functions
+floor = lambda x: mpm.floor(x)
+ceil = lambda x: mpm.ceil(x)
 nint = lambda *args, **kwargs: mpm.nint(*args, **kwargs)
 sqrt = lambda *args, **kwargs: mpm.sqrt(*args, **kwargs)
 square = lambda x: x*x

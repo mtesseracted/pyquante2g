@@ -37,14 +37,15 @@ def overlap_tho66(alpha1,lmn1,A,alpha2,lmn2,B):
     gamma = alpha1+alpha2
     P = f.gto_prod_cen(alpha1,A,alpha2,B)
 
-    pre = (core.pi/gamma**core.arb(1.5))*core.exp(-alpha1*alpha2*rab2/gamma)
+    pre = ((core.pi/gamma)**core.arb(1.5))*core.exp(-alpha1*alpha2*rab2/gamma)
     wx = overlap1d(l1,l2,P[0]-A[0],P[0]-B[0],gamma)
     wy = overlap1d(m1,m2,P[1]-A[1],P[1]-B[1],gamma)
     wz = overlap1d(n1,n2,P[2]-A[2],P[2]-B[2],gamma)
     return pre*wx*wy*wz
 
 
-def kinetic_tho66(alpha, beta, acen, bcen, amom, bmom):
+# def kinetic_tho66(alpha, beta, acen, bcen, amom, bmom):
+def kinetic_tho66(alpha, amom, acen, beta, bmom, bcen):
     r""" Compute kinetic expections of 3D Cartesian Gaussians
     ----------
     amom, bmom : angular momentum indices 
@@ -53,11 +54,11 @@ def kinetic_tho66(alpha, beta, acen, bcen, amom, bmom):
     -------
     return : float, scalar expectation
     """
-    l1, m1, n1 = amom
+    # l1, m1, n1 = amom
     l2, m2, n2 = bmom
     ov = overlap_tho66
     offs = [core.arr_init([0,]*3) for _ in range(3)]
-    offs[0][0] = offs[1][1] == offs[2][2] == core.arb(2)
+    offs[0][0] = offs[1][1] = offs[2][2] = core.arb(2)
 
     term0  = ov(alpha, amom, acen, beta, bmom, bcen)
     term0 *= beta * (2*sum(bmom) + 3)
@@ -74,3 +75,24 @@ def kinetic_tho66(alpha, beta, acen, bcen, amom, bmom):
 
     return term0+term1+term2
 #end def kinetic_tho66(alpha, beta, acen, bcen, amom, bmom) -> float:
+
+
+if __name__ == "__main__":
+    arb = core
+    sfac = arb.pi**1.5
+    a1 = arb.arb(0.5)
+    ra = arb.arr_init([0.,]*3)
+    s0 = arb.arr_init((0,)*3)
+    g0 = [a1, s0, ra]
+    ov0 = overlap_tho66(*g0, *g0) # alr
+    # assert mpm.almosteq(ans0, sfac), f"GT: {float(sfac):.4f} Ans: {float(ans0):.4f} Diff:{float(ans0-sfac):.4e}"
+
+    kin0 = kinetic_tho66(*g0, *g0) # alr
+    # sfac = pi^1/5 = 5.568327
+    #(ss) = term0 + term1; alpha=1/2
+    # term0 = 1/2*sfac*3 = 3/2*sfac
+    # term1 = 3 * 1/2 * sfac * -2 * (1/2)^2 = -3/4 *  sfac
+    # (ss) = (3/2 - 3/4) * sfac = 3/4 * pi^(3/2)
+
+    debug_var = 1
+
