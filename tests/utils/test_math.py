@@ -67,6 +67,7 @@ def test_gamma_half_int():
         assert isclose(math.gamma_half_int(n), expected)
 
 
+@pytest.mark.arb
 def test_igamma():
     import pyquante22.arb_math as am
     test_values = [
@@ -89,6 +90,7 @@ def test_igamma():
         assert passed, f"Failed for a={a}, x={x}, %err={perr:.2e}, amax={amax:.2e}"  
 
 
+@pytest.mark.arb
 def test_log_igamma():
     # go up tp 80 for 4*amax; amax=20
     import pyquante22.arb_math as am
@@ -136,6 +138,8 @@ test_values = [
 def fboys_pair(request):
     return request.param
 
+
+@pytest.mark.arb
 def test_fboys(fboys_pair):
     # go up tp 80 for 4*amax; amax=20
     # densely sample around piecewise boundaries, (m=m, x<1e-15), (m=40, x=1)

@@ -13,10 +13,12 @@ description = "vectorized pyquante2"
 authors = [{ name = "Aaron Mahler", email = "m.tesseracted@gmail.com" }]
 dependencies = [
     "numpy",
-    "matplotlib",
 ]
 
 [project.optional-dependencies]
-gpu = ["torch"]              # machine learning extras
-dev = ["pytest", "black"]   # development tools
+gpu = ["torch"]             # machine learning extras
+dev = ["black"]             # development tools
+test = ["pytest","scipy",
+    "mpmath"]
+figs = ["matplotlib"]
 #docs = ["sphinx"]           # documentation tools

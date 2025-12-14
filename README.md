@@ -36,3 +36,20 @@
 
 
 ## References
+
+
+## @TODOs
+- refactor so arb_math and ref_ints are one module with a chooseable back end
+
+
+## Future Ideas
+- Make a pure s-type only HF/DFT calculation where basis functions dof's
+are set through backprop. This would use an s-type only integral library
+like the main idea needs.
+
+
+## Paper Series
+- GPU enabled pure-python, multi-backend supported integrals HF/DFT code
+- Pure s-type formulation (electron splatting?)
+- DDPM/GAN formulation of RDMs
+- Main idea

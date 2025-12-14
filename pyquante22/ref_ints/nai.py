@@ -73,22 +73,26 @@ def _nuclear_attraction(la, lb, ra, rb, alpha, beta, r):
     l1, m1, n1 = la
     l2, m2, n2 = lb
     p = alpha + beta
-    rgp = (alpha * ra[:, np.newaxis, np.newaxis] + beta * rb[:, np.newaxis, np.newaxis]) / (
-        alpha + beta
-    )
-    dr = rgp - r[:, np.newaxis, np.newaxis]
+    # rgp = (alpha * ra[:, np.newaxis, np.newaxis] + beta * rb[:, np.newaxis, np.newaxis]) / (
+    #     alpha + beta)
+    # dr = rgp - r[:, np.newaxis, np.newaxis]
+    # turn off vectorization because fboys() doesn't work for arrays
+    rgp = (alpha * ra[:] + beta * rb[:]) / (alpha + beta)
+    dr = rgp - r[:]
 
     a = 0.0
     for t, u, v in product(*[range(l) for l in [l1 + l2 + 1, m1 + m2 + 1, n1 + n2 + 1]]):
         a = a + expansion(l1, l2, ra[0], rb[0], alpha, beta, t) * expansion(
             m1, m2, ra[1], rb[1], alpha, beta, u
         ) * expansion(n1, n2, ra[2], rb[2], alpha, beta, v) * _hermite_coulomb(t, u, v, 0, p, dr)
-    a = a * 2 * np.pi / p
+    a *= -2 * np.pi / p # negative assumes charges are opposite
     return a
 
 
 def nai_ht95(ga:GTO, gb:GTO, R):
     return _nuclear_attraction(ga.l, gb.l, ga.r, gb.r, ga.a, gb.a, R)
+
+nai_funcs = [nai_ht95,]
 
 
 if __name__ == "__main__":

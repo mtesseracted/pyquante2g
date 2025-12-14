@@ -42,8 +42,8 @@ def arange(*args):
 
 
 ## Math functions
-floor = lambda x: mpm.floor(x)
-ceil = lambda x: mpm.ceil(x)
+floor = lambda *args, **kwargs: mpm.floor(*args, **kwargs)
+ceil = lambda *args, **kwargs: mpm.ceil(*args, **kwargs)
 nint = lambda *args, **kwargs: mpm.nint(*args, **kwargs)
 sqrt = lambda *args, **kwargs: mpm.sqrt(*args, **kwargs)
 square = lambda x: x*x
@@ -54,6 +54,7 @@ gamma = lambda *args, **kwargs: mpm.gamma(*args, **kwargs)
 lgamma = lambda *args, **kwargs: mpm.loggamma(*args, **kwargs)
 gammainc = lambda *args, **kwargs: mpm.gammainc(*args, **kwargs)
 binom = lambda *args, **kwargs: mpm.binomial(*args, **kwargs)
+erf = lambda *args, **kwargs: mpm.erf(*args, **kwargs)
 
 
 ## Constants
