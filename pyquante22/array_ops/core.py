@@ -28,6 +28,7 @@ manipulation_ops = [
 ]
 misc_ops = [
     "unique", # is this a reduction?
+    "einsum",
 ]
 basic_ops = sum([
     math_ops_unary, 

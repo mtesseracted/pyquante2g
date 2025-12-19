@@ -40,6 +40,9 @@
 
 ## @TODOs
 - refactor so arb_math and ref_ints are one module with a chooseable back end
+- make analysis scripts for accuracies of: fboys, methods acc.
+and time (e.g. HT95 vs THO66 for NAI)
+- after analysis, clean up the __main__ sections of those files
 
 
 ## Future Ideas

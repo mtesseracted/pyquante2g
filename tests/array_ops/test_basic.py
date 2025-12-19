@@ -111,3 +111,10 @@ def test_array_ops_mixture(backend):
     assert cs.shape == (6,2)
 #end def test_array_ops_np_ops():
  
+
+# def test_conv_full_batch(backend):
+#     arr.set_backend(backend)
+#     arr.set_dtype("float64")
+#     # from cart_gto calc_prod_binoms we want:
+#     # conv_full_batch to have the same behavior
+#     # from cart_gto triple_conv_dot behavior we want:

@@ -274,7 +274,7 @@ class CartGtoPrimPair():
 
 tmp = binom2_ch(arr_init(12), arr_init(5))
 
-import arb_math as arb
+import pyquante22.arb_math as arb
 
 # s p d f g h j
 # 0 1 2 3 4 5 6

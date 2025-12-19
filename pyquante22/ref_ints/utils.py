@@ -56,15 +56,25 @@ ghalfs = np.asarray(gamma_half_int(n) for n in arange_max[:2*amax+1])
 def norm2(a):
     return np.dot(a,a)
 
-def gaussian_product_center(alpha1,A,alpha2,B):
-    """ the center of the product of two cartesian gaussians """
-    return (alpha1*A+alpha2*B)/(alpha1+alpha2)
+# def gaussian_product_center(alpha1,A,alpha2,B):
+#     """ the center of the product of two cartesian gaussians """
+#     return (alpha1*A+alpha2*B)/(alpha1+alpha2)
+
+# def gaussian_product_center_fma(alpha1, A, alpha2, B):
+#     p = alpha1 + alpha2
+#     w = alpha2 / p
+#     return np.fma(w, (B - A), A)  # A + w*(B-A) with one rounding
+
+def gaussian_product_center(alpha1, A, alpha2, B):
+    p = alpha1 + alpha2 # scale by p to keep ratios well-behaved
+    a1, a2 = alpha1 / p, alpha2 / p
+    return a1 * A + a2 * B
 
 
 def binomial_prefactor(s,ia,ib,xpa,xpb):
     """ The integral prefactor containing the binomial coefficients
     """
-    total= 0
+    total= 0.0
     # for t in range(s+1):
     #     if s-ia <= t <= ib:
     for t in range(s-ia, ib+1):

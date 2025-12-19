@@ -16,19 +16,18 @@ def cartPow2fullSym(am):
         for c,a in zip(['x','y','z'], am) if a != 0])
     return ret
 
-pow2fullsym = {
-    (0,0,0): 's',
-    (1,0,0): 'px',
-    (0,1,0): 'py',
-    (0,0,1): 'pz',
-    (2,0,0): 'dx2',
-    (0,2,0): 'dy2',
-    (0,0,2): 'dz2',
-    (1,1,0): 'dxy',
-    (0,1,1): 'dyz',
-    (1,0,1): 'dxz',
-}
-
+# pow2fullsym = { # deprecated, call cartPow2fullSym
+#     (0,0,0): 's',
+#     (1,0,0): 'px',
+#     (0,1,0): 'py',
+#     (0,0,1): 'pz',
+#     (2,0,0): 'dx2',
+#     (0,2,0): 'dy2',
+#     (0,0,2): 'dz2',
+#     (1,1,0): 'dxy',
+#     (0,1,1): 'dyz',
+#     (1,0,1): 'dxz',
+# }
 
 
 def find_sum_triplets(n):
@@ -52,6 +51,7 @@ def find_sum_triplets(n):
 
     return ret
 #end def find_sum_triplets(n):
+
 
 def gen_cartesian_momentums(n):
     trips = find_sum_triplets(n)

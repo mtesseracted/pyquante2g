@@ -67,13 +67,14 @@ class TorchBackend(ArrayBackend):
 
     # def conv_transpose1d(self, *args, **kwargs):
     #     return torch.conv_transpose1d(*args, **kwargs)
-    def conv_full_batch(a, b): # @TODO: needs to be in array_ops
+    def conv_full_batch(self, a, b): # @TODO: needs to be in array_ops
         """ batch convolve a with b (full size output)
         a is (batch, n), b is (batch, m)
         output is (batch, n+m-1)
         """
         return torch.conv_transpose1d( # tranpose1d does "full" mode
             a[None,:,:], b[:,None,:], groups=a.shape[0]
+            # a, b, groups=a.shape[0]
         ).squeeze(0)
 
 
