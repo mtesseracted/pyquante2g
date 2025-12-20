@@ -91,7 +91,6 @@ def kinetic_hh12(ga:GTO, gb:GTO):
     gc = ga.clone(l=np.copy(ga.l))
     offs = 2 * np.eye(3, dtype=gc.l.dtype)
 
-    term0 = term1 = term2 = 0.0
     ret = 0.0
     for ii in range(3):              #! loop over which coord is 2nd deriv
 

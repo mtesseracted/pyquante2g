@@ -108,6 +108,11 @@ class CartGtoPrim():
             ao.concat([self.alpha, other.alpha]),
         )
 
+    def __radd__(self, other): # handle sum([list_of_gtos])
+        if isinstance(other, int) and other == 0: 
+            return self
+        return self.__add__(other)
+
     def __repr__(self):
         ret = f"{type(self).__name__} (Lx,Ly,Lz) (Rx,Ry,Rz) Exp"
         for ii in range(len(self)//self.nd):
@@ -195,7 +200,7 @@ class CartGtoPrimPair():
         self.gamma = ga.alpha + gb.alpha            # 
         self.pab = self.calc_product_centers()      # combined center, P_{AB}
         self.binom_pres = self.calc_prod_binoms()   # binomial prefactors
-        # self.hab = self.calc_h_array()
+        self.hab = self.calc_h_array()
 
     def __len__(self):
         return len(self.ga)
@@ -409,28 +414,29 @@ class CartGtoPrimPair():
             raise ValueError("::ERR::(coulomb_rep) Batch size must be a multiple of 3")
 
         nd = self.nd
-        gab, gcd = self.gamma[::nd], other.gamma[::nd]
+        gab, gcd = self.gamma[:], other.gamma[:]
         bsz = len(self) // nd
         # tmp = ao.empty(bsz)
         # self.deltas = 0.25 * (one/self.gamma + one/other.gamma)
         self.deltas = 0.25 * (one/gab + one/gcd)
-        c_array = self.calc_c_array(other).view(bsz,3,-1).transpose(0,1) #.contiguous()
+        c_array = self.calc_c_array(other).view(bsz,nd,-1).transpose(0,1) #.contiguous()
 
         # delta = o4 / gab + o4 / gcd
-        qp2 = ao.pow(self.pab-other.pab, 2*one).reshape(-1,3).sum(axis=1)
-        fbx = 0.25 * qp2 / self.deltas
+        qp2 = ao.pow(self.pab-other.pab, 2*one).reshape(-1,nd).sum(axis=1)
+        fbx = 0.25 * qp2 / self.deltas[::nd]
         ijkmax = 3 * c_array.shape[-1] # @TODO get actual max needed
         boys = fboys(arange_max[:ijkmax+1][None,:], fbx[:,None])
         ret = triple_conv_dot(c_array[0], c_array[1], c_array[2], boys)
         del fbx, boys, 
 
-        aa, ab = self.ga.alpha[::3], self.gb.alpha[::3]
-        ac, ad = other.ga.alpha[::3], other.gb.alpha[::3]
-        ra, rb = self.ga.cen.view(bsz,3), self.gb.cen.view(bsz,3)
-        rc, rd = other.ga.cen.view(bsz,3), other.gb.cen.view(bsz,3)
+        aa, ab = self.ga.alpha[::nd], self.gb.alpha[::nd]
+        ac, ad = other.ga.alpha[::nd], other.gb.alpha[::nd]
+        ra, rb = self.ga.cen.view(bsz,nd), self.gb.cen.view(bsz,nd)
+        rc, rd = other.ga.cen.view(bsz,nd), other.gb.cen.view(bsz,nd)
         rab2 = ao.sum(ao.square(ra-rb), dim=1)
         rcd2 = ao.sum(ao.square(rc-rd), dim=1)
 
+        gab, gcd = gab[::nd], gcd[::nd]
         ret *= eri_fac / (gab*gcd*ao.sqrt(gab+gcd))
         ret *= ao.exp(-aa*ab*rab2/gab)
         ret *= ao.exp(-ac*ad*rcd2/gcd)

@@ -32,17 +32,29 @@
     - overlap: overlaps and kinetic
     - nai: nuclear attraction integral
 
-@TODO: need to abstract the tensor.device method at least for tests
 
 
 ## References
+- [Hiroshi Taketa, Sigeru Huzinaga, Kiyoshi O-ohata, 1966 (THO66)][tho66]
+- [T. Helgaker and P. Tayler 1995 (HT95)][ht95]
+- [Minhhuy Hô and Julio-Manuel Hernández-Pérez, 2012 (HH12)][hh12]
+
+[tho66]: https://doi.org/10.1143/JPSJ.21.2313
+[ht95]: https://doi.org/10.1142/9789812832115_0001
+[hh12]: https://doi.org/doi:10.3888/tmj.14-3
 
 
 ## @TODOs
+- need to abstract the tensor.device method at least for tests
+- make cart_gto.py have alpha values that aren't full nd size
 - refactor so arb_math and ref_ints are one module with a chooseable back end
 - make analysis scripts for accuracies of: fboys, methods acc.
 and time (e.g. HT95 vs THO66 for NAI)
 - after analysis, clean up the __main__ sections of those files
+- look at whether JIT works with ArrayOps, will need to use the functional
+version of JIT instead of decoratores, e.g. torch.script(), jax.jit(),
+cupy is questionable?, tf.function()
+    - cupy can use cp.RawKernel(), but it takes a string, not a function
 
 
 ## Future Ideas
