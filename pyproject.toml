@@ -11,6 +11,7 @@ name = "pyquante22"
 version = "0.0.0"
 description = "vectorized pyquante2"
 authors = [{ name = "Aaron Mahler", email = "m.tesseracted@gmail.com" }]
+requires-python = ">=3.8"
 dependencies = [
     "numpy",
 ]
@@ -22,3 +23,10 @@ test = ["pytest","scipy",
     "mpmath"]
 figs = ["matplotlib"]
 #docs = ["sphinx"]           # documentation tools
+
+[tool.black]
+line-length = 82
+target-version = ["py38"]
+skip-string-normalization = true    # Do NOT normalize quotes (you use both intentionally)
+skip-magic-trailing-comma = true    # Avoid exploding collections unless necessary
+include = '\.py$'                   # Keep Black from touching notebooks
