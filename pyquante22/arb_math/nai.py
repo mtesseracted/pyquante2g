@@ -49,7 +49,7 @@ def nuclear_attraction(alpha1,lmn1,A,alpha2,lmn2,B,C):
             for K in core.arange(n1+n2+1):
                 total += Ax[I]*Ay[J]*Az[K]*f.fboys(I+J+K,rcp2*gamma)
                 
-    val= -2*core.pi/gamma*core.exp(-alpha1*alpha2*rab2/gamma)*total
+    val = -2*core.pi/gamma*core.exp(-alpha1*alpha2*rab2/gamma)*total
     return val
 #end def nuclear_attraction(alpha1,lmn1,A,alpha2,lmn2,B,C):
 

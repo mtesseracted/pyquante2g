@@ -29,6 +29,7 @@ def num2arb(n, eps=10*sys.float_info.epsilon):
         n = frac_approx(n, eps=eps)
     return mpm.mpf(n.numerator) / mpm.mpf(n.denominator)
 
+from_float = lambda x: mpm.mpf(x) # convert float exactly
 arb = lambda x: num2arb(x) # shorthand for num2arb
 arr_init = lambda x: mpm.matrix([arb(xx) for xx in x])
 # arr_init = lambda x: mpm.matrix(

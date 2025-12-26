@@ -8,7 +8,8 @@ math_ops_unary = [
     "sqrt", "square",
     "exp", "log",
     "sin", "cos", "atan",
-    "floor", "ceil", 
+    "abs", "sign",
+    "round", "floor", "ceil",
     "lgamma",
 ]
 math_ops_binary = [
@@ -27,7 +28,7 @@ manipulation_ops = [
     "where", 
 ]
 misc_ops = [
-    "unique", # is this a reduction?
+    "unique", # call this a reduction?
     "einsum",
 ]
 basic_ops = sum([

@@ -24,6 +24,18 @@ def binom2_exact(n:int, k:int): # use python's arbitrary int
     return fact_exact(n) // (fact_exact(k) * fact_exact(n-2*k))
 
 
+def binom22_exact(i:int, r:int, u:int):
+    """ i! / (r! u! (i-2(r+u))!) 
+    if all inputs are int, the result should be int
+    proof: multiply out b(i,r)b(i-r,r)b(i-2r,u)b(i-2r-u,u) where b(n,k) is biomial
+    and you get binom22() times r!u!, so clearly int.
+    """
+    if 2*(r+u) > i: return 0
+    return fact_exact(i) // (
+        fact_exact(r) * fact_exact(u) * fact_exact(i-2*(r+u))
+    )
+
+
 def gamma_half_int(n): # 
     """ (2n-1)!! / 2**n = Gamma(n+1/2) / sqrt(pi) """
     return gamma(n + 0.5) / sqrt(pi)
