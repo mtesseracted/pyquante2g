@@ -1,3 +1,7 @@
+###########################################################
+# old debugging code
+###########################################################
+
 # code from unrolling h_array in the CartGtoPrimPair.calc_h_array()
 # there are order 1e-15 differences in the output with calc_h_array_gt()
 # but after unrolling the largest difference elements then calculating
@@ -5,8 +9,6 @@
 # all the sub terms agreed. I suspect the difference is thereforse
 # some backend out of order execution (OOE) that happens in the vectorized
 # code.
-
-
 if False:
     if False:
         # @DEBUG, compare to numpy calculated
@@ -155,7 +157,57 @@ def conv_full_batch(a, b):
     return AO.conv_transpose1d(a[None, :, :], b[:, None, :], groups=a.shape[0]).squeeze(0)
 # ...existing code...
 
-# code from 
+
+# def calc_kinetic2(gpair, nd=3):
+#     """ formulas are hard coded to nd=3 """
+#     ga, gb = gpair.ga, gpair.gb
+#     bsz = (len(ga)//nd, nd)
+#     amb = gb.amom.view(bsz)
+#     ab = gb.alpha[::nd]
+#     term0 = ab * (2*ao.sum(amb, axis=1) + 3) * \
+#         gpair.calc_overlap()
+
+#     offsets = 2 * ao.eye(nd, dtype=gpair.ga.amom.dtype)
+#     term1  = gpair.calc_overlap(offset=offsets[0])
+#     term1 += gpair.calc_overlap(offset=offsets[1])
+#     term1 += gpair.calc_overlap(offset=offsets[2])
+#     term1 *= -2 * ao.square(ab)
+
+#     l2 = gb.amom[0::nd]
+#     term2  = l2 * (l2-1) * gpair.calc_overlap(offset=-offsets[0])
+#     l2 = gb.amom[1::nd]
+#     term2 += l2 * (l2-1) * gpair.calc_overlap(offset=-offsets[1])
+#     l2 = gb.amom[2::nd]
+#     term2 += l2 * (l2-1) * gpair.calc_overlap(offset=-offsets[2])
+#     term2 *= -half
+
+#     return term0 + term1 + term2
+
+
+# code from testing accuracy of calc_nai()
+'''
+def ndindex(shape):
+    import itertools
+    return itertools.product(*[range(n) for n in shape]) # generator
+
+def fboys_arb(m, x): # @DEBUG with arbitrary precision math
+    import pyquante22.arb_math as arb
+    full_sz = tuple(max(a,b) for a,b in zip(m.shape,x.shape))
+    mb, xb = ao.broadcast_to(m, full_sz), ao.broadcast_to(x, full_sz)
+    ret = ao.zeros(full_sz)
+    for idx in ndindex(full_sz):
+        ret[idx] = ao.arr(float(arb.fboys(mb[idx].item(), xb[idx].item())))
+    return ret
+
+def triple_sum_dot(ax, ay, az, fxyz):
+    # for debugging
+    totals = ao.zeros(ax.shape[0])
+    for ii in range(ax.shape[1]):
+        for jj in range(ay.shape[1]):
+            for kk in range(az.shape[1]):
+                totals += ax[:,ii] * ay[:,jj] * az[:,kk] * fxyz[:,ii+jj+kk]
+    return totals
+'''
 if False:
 
     def calc_a_array_arb(self, rcen:ArrType) -> ArrType:

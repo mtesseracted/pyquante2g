@@ -54,12 +54,12 @@ binom22s = ao.arr( # this is too big, it's 141kB for amax=20
 
 
 # ghalfs = ao.arr([me.gamma_half_int_exact(n) for n in range(2*amax+1)])
-def dfact2m1o2(n):
+def gamma_half_int(n): # 
     """double factorial of 2n-1 over 2**n"""
     return ao.exp(ao.lgamma(n + 0.5 * one)) / ao.sqrt(pi)
 
 
-ghalfs = dfact2m1o2(ao.arr(arange_max[: 2 * amax + 1]))  # cast to default_dtype
+ghalfs = gamma_half_int(ao.arr(arange_max[: 2 * amax + 1]))  # cast to default_dtype
 
 
 def fboys(m, x):  # stable @ x=0
@@ -70,21 +70,6 @@ def fboys(m, x):  # stable @ x=0
     mask = ao.broadcast_to(mask, ret.shape)
     # ret[:] = ao.where(mask, 0.5/m2, ret) # @TODO: optimize for broadcasting with m and x being different sizes
     ret[mask] = ao.broadcast_to(0.5 / m2, ret.shape)[mask]
-    return ret
-
-
-def ndindex(shape):
-    import itertools
-    return itertools.product(*[range(n) for n in shape]) # generator
-
-
-def fboys_arb(m, x): # @DEBUG with arbitrary precision math
-    import pyquante22.arb_math as arb
-    full_sz = tuple(max(a,b) for a,b in zip(m.shape,x.shape))
-    mb, xb = ao.broadcast_to(m, full_sz), ao.broadcast_to(x, full_sz)
-    ret = ao.zeros(full_sz)
-    for idx in ndindex(full_sz):
-        ret[idx] = ao.arr(float(arb.fboys(mb[idx].item(), xb[idx].item())))
     return ret
 
 
@@ -124,15 +109,6 @@ def triple_conv_dot(
     return ao.einsum('ij,ij->i', ax, c)
 # end def triple_conv_dot()
 
-def triple_sum_dot(ax, ay, az, fxyz):
-    # for debugging
-    totals = ao.zeros(ax.shape[0])
-    for ii in range(ax.shape[1]):
-        for jj in range(ay.shape[1]):
-            for kk in range(az.shape[1]):
-                totals += ax[:,ii] * ay[:,jj] * az[:,kk] * fxyz[:,ii+jj+kk]
-    return totals
-
 
 class CartGtoPrim:
     """Cartesian GTO Primitive"""
@@ -150,10 +126,11 @@ class CartGtoPrim:
         return len(self.amom)
 
     def __mul__(self, other):
+        # syntactic sugar, |ab) = a*b
         return CartGtoPrimPair(self, other)
 
     def __add__(self, other):
-        """create a larger batch (overload __and__? ga & gb)"""
+        """create a larger batch"""
         return CartGtoPrim(
             ao.concat([self.amom, other.amom]),
             ao.concat([self.cen, other.cen]),
@@ -212,7 +189,6 @@ class CartGtoPrim:
                 else f"{ao.amin(self.alpha)}...{ao.amax(self.alpha)}"
             )
         return f"GTO[{len(self)//self.nd}]_{{{ams}}}@({rxs};{aas})[{self.hash()}]"
-
     # end def __str__(self):
 
     def __getitem__(self, idx):  # lra ordering
@@ -246,10 +222,7 @@ class CartGtoPrim:
         mask = (amom < 0)[:, None]  # zero out negative amom (for kinetic)
         ret[ao.broadcast_to(mask, ret.shape)] = zero
         return ret
-
     # end def calc_binoms()
-
-
 # end class CartGtoPrim():
 
 
@@ -291,12 +264,12 @@ class CartGtoPrimPair:
         return f"PairGTO[{len(self)}]{sga}//{sgb}"
 
     def __or__(self, other):
-        # override for pretty ERI: (a*b|c*d)
-        # NAI: (a*b|R)
+        # syntactic sugar, ERI: (a*b|c*d), NAI: (a*b|R)
         if isinstance(other, ArrType):
-            raise NotImplementedError()
+            return self.calc_nai(other)
         if isinstance(other, type(self)):
             return self.calc_eri(other)
+        raise NotImplementedError(f"No integral implemented for {type(other)}")
 
     def hash(self, digits=8):
         return sha256(repr(self).encode('utf-8')).hexdigest()[:digits]
@@ -413,7 +386,6 @@ class CartGtoPrimPair:
 
         sum_idx = irng - 2*rrng - urng
         sum_idx[~imask] = full_sz[1] # dummy index @TODO check if always 0 and optimize this out
-        # sum_idx_batch = sum_idx.view(-1).expand(gs.shape[0], -1) # expand to batch
         terms_flat = terms.reshape(full_sz[0], -1)
         sum_idx_batch = ao.broadcast_to(sum_idx.reshape(-1), (full_sz[0], -1))
         ret = ao.zeros((full_sz[0], full_sz[1]+1))
@@ -459,13 +431,10 @@ class CartGtoPrimPair:
         irng = arange_max[: full_sz[1]][:, None]
         rrng = arange_max[: full_sz[2]][None, :]
         irmask = rrng <= irng // 2
-        # iflat = irng.expand(full_sz[1:])[irmask]
-        # rflat = rrng.expand(full_sz[1:])[irmask]
         iflat = ao.broadcast_to(irng, full_sz[1:])[irmask]
         rflat = ao.broadcast_to(rrng, full_sz[1:])[irmask]
         iiflat = iflat - 2 * rflat
 
-        # h_vals_flat = bps.expand(full_sz)[:,irmask] # irng > amom == 0 from bps
         h_vals_flat = ao.broadcast_to(bps, full_sz)[
             :, irmask
         ]  # irng > amom == 0 from bps
@@ -474,7 +443,6 @@ class CartGtoPrimPair:
         ret = ao.zeros(full_sz[:2])
         sum_ids = ao.broadcast_to(iiflat.reshape(1, -1), h_vals_flat.shape)
         ret.scatter_add_(dim=1, index=sum_ids, src=h_vals_flat)
-        # ret.index_add_(1, iiflat, h_vals_flat)
         return ret
 
     # end def calc_h_array(self, other):
@@ -499,7 +467,6 @@ class CartGtoPrimPair:
 
         iiflat = iirng[iumask]
         iuflat = iurng[iumask]
-        # uflat = urng.expand(*iumask.shape[:2],-1)[iumask]
         uflat = ao.broadcast_to(urng, (*iumask.shape[:2], urng.shape[-1]))[iumask]
         facts = binom2s[iiflat + uflat, uflat]  #
         # parity = _parity((cdrng+urng)%2).expand(iumask.shape[0],-1,-1)[iumask]
@@ -509,8 +476,6 @@ class CartGtoPrimPair:
         )[iumask]
 
         c_vals_flat = ao.pow(qp[:, None], iuflat[None, :])
-        # c_vals_flat *= ((hab[:,:,None]*hcd[:,None,:])[:,:,:,None]
-        #     .expand(-1,-1,-1,iumask.shape[-1])[:,iumask])
         c_vals_flat *= ao.broadcast_to(
             (hab[:, :, None] * hcd[:, None, :])[:, :, :, None],
             (*hab.shape[:2], hcd.shape[1], iumask.shape[-1]),
@@ -524,7 +489,6 @@ class CartGtoPrimPair:
         tmp3 = ao.pow(deltas[:, None], -arange_max[: lmax + 2])
         ret *= tmp3
         return ret
-
     # end def calc_c_array(self, other:"CartGtoPrimPair") -> ArrType:
 
     def calc_eri(self, other) -> ArrType:
@@ -561,37 +525,9 @@ class CartGtoPrimPair:
         ret *= ao.exp(-aa * ab * rab2 / gab)
         ret *= ao.exp(-ac * ad * rcd2 / gcd)
         return ret
-
     # end def calc_eri(self, other) -> ArrType:
 
-
 # end class CartGtoPrimPair():
-
-
-# def calc_kinetic2(gpair, nd=3):
-#     """ formulas are hard coded to nd=3 """
-#     ga, gb = gpair.ga, gpair.gb
-#     bsz = (len(ga)//nd, nd)
-#     amb = gb.amom.view(bsz)
-#     ab = gb.alpha[::nd]
-#     term0 = ab * (2*ao.sum(amb, axis=1) + 3) * \
-#         gpair.calc_overlap()
-
-#     offsets = 2 * ao.eye(nd, dtype=gpair.ga.amom.dtype)
-#     term1  = gpair.calc_overlap(offset=offsets[0])
-#     term1 += gpair.calc_overlap(offset=offsets[1])
-#     term1 += gpair.calc_overlap(offset=offsets[2])
-#     term1 *= -2 * ao.square(ab)
-
-#     l2 = gb.amom[0::nd]
-#     term2  = l2 * (l2-1) * gpair.calc_overlap(offset=-offsets[0])
-#     l2 = gb.amom[1::nd]
-#     term2 += l2 * (l2-1) * gpair.calc_overlap(offset=-offsets[1])
-#     l2 = gb.amom[2::nd]
-#     term2 += l2 * (l2-1) * gpair.calc_overlap(offset=-offsets[2])
-#     term2 *= -half
-
-#     return term0 + term1 + term2
 
 
 debug_var = 1

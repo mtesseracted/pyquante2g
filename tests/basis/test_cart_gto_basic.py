@@ -113,6 +113,34 @@ def test_calc_binoms():
 # end def test_calc_binoms():
 
 
+def test_triple_conv_sum():
+    from pyquante22.basis.cart_gto import triple_conv_dot
+    batch_sz = 11
+    ax = np.random.rand(batch_sz, batch_sz-3)
+    ay = np.random.rand(batch_sz, batch_sz-0)
+    az = np.random.rand(batch_sz, batch_sz+3)
+    fxyz = np.random.rand(batch_sz, ax.shape[1]+ay.shape[1]+az.shape[1])
+
+    # explicit formula we're trying to match
+    def triple_sum_dot(ax, ay, az, fxyz):
+        totals = np.zeros(ax.shape[0])
+        for ii in range(ax.shape[1]):
+            for jj in range(ay.shape[1]):
+                for kk in range(az.shape[1]):
+                    totals += ax[:,ii] * ay[:,jj] * az[:,kk] * fxyz[:,ii+jj+kk]
+        return totals
+
+    nargs = [ax, ay, az, fxyz]
+    aargs = [ao.arr(a) for a in nargs]
+    ans = np.asarray(ao.tolist(triple_conv_dot(*aargs)))
+    gt = triple_sum_dot(*nargs)
+    perrs = (ans - gt) / gt
+    pmax = np.abs(perrs).max()
+    assert np.allclose(ans, gt, rtol=16*EPS, atol=EPS/64), \
+        f"worst %err: {pmax:.4e}"
+#end def test_triple_conv_sum():
+
+
 def test_calc_h_array():
     from pyquante22.ref_ints.eri import H_array
 
@@ -166,6 +194,5 @@ def test_calc_h_array():
                         passed
                     ), f"fail @ {str(g12)} max(%err): {np.abs(perrs).max():.4e}"
     # end for r1 in r_list:
-
-
 # end def test_calc_h_array():
+
