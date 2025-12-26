@@ -154,3 +154,84 @@ def conv_full_batch(a, b):
     _ensure_ao()
     return AO.conv_transpose1d(a[None, :, :], b[:, None, :], groups=a.shape[0]).squeeze(0)
 # ...existing code...
+
+# code from 
+if False:
+
+    def calc_a_array_arb(self, rcen:ArrType) -> ArrType:
+        import pyquante22.arb_math as arb
+        dPn = self.pab - rcen
+        dPa = self.pab - self.ga.cen
+        dPb = self.pab - self.gb.cen
+        abmom = self.ga.amom + self.gb.amom
+        llmax = abmom.max().item()
+        full_sz = (len(self), llmax + 1,)
+        ret = ao.zeros(full_sz)
+        for ib in range(full_sz[0]):
+            barr = arb.A_array(
+                self.ga.amom[ib].item(), self.gb.amom[ib].item(), 
+                dPa[ib].item(), dPb[ib].item(), 
+                dPn[ib].item(), self.gamma[ib].item()
+            )
+            for ii, v in enumerate(barr):
+                ret[ib,ii] = float(v)
+
+            debug_var = 1
+            aargs = (
+                self.ga.amom[ib].item(), self.gb.amom[ib].item(), 
+                dPa[ib].item(), dPb[ib].item(), 
+                dPn[ib].item(), self.gamma[ib].item()
+            )
+            l1,l2,PA,PB,CP,g = aargs
+            Imax = l1+l2+1
+            import mpmath as mpm
+            A2d = mpm.zeros(Imax+1, 2*Imax+1)
+            iis = [0 for _ in range(int(2*Imax+1))]
+            for i in arb.arange(Imax):
+                for r in range(int(arb.floor(i/2)+1)):
+                    for u in range(int(arb.floor((i-2*r)/2)+1)):
+                        I = i-2*r-u
+                        term =  arb.A_term(i,r,u,l1,l2,PA,PB,CP,g)
+                        A2d[I,iis[I]] = term
+                        iis[I] += 1
+
+
+        return ret
+
+        # code from inside calc_nai()
+        # @DEBUG
+        import pyquante22.arb_math as arb
+        a2 = self.calc_a_array_arb(rcen).reshape(bsz, nd, -1).transpose(0, 1) # @DEBUG
+        boy2 = fboys_arb(arange_max[: ijkmax + 1][None, :], fbx[:, None]) # @DEBUG
+        ret2 = triple_conv_dot(a2[0], a2[1], a2[2], boys)
+        ret2 *= -2*pi/gab * ao.exp(-aa*ab*rab2/gab)
+        ret3 = triple_sum_dot(a2[0], a2[1], a2[2], boys)
+        ret3 *= -2*pi/gab * ao.exp(-aa*ab*rab2/gab)
+        # ret4 = triple_sum_dot(a2[0], a2[1], a2[2], boys)
+        # # check the prefactor, assumes batch size is 1:
+        # agab = arb.from_float(gab.item())
+        # aaa = arb.from_float(aa.item())
+        # aab = arb.from_float(ab.item())
+        # arab2 = arb.from_float(rab2.item())
+        # afac = -2*arb.pi/agab * arb.exp(-aaa*aab*arab2/agab)
+        # gt = float(afac)
+        # fac = (-2*pi/gab * ao.exp(-aa*ab*rab2/gab)).item()
+
+        aerrs = a_array - a2
+        mask = ao.abs(a2) > 0
+        aerrs[mask] /= a2[mask]
+        aemx = ao.abs(aerrs).max()
+
+        berrs = boys - boy2
+        mask = ao.abs(boy2) > 0
+        berrs[mask] /= boy2[mask]
+        bemx = ao.abs(berrs).max()
+
+        diff = ret - ret2
+        perr = diff/ret2
+        if ao.abs(perr).item() > 1e-14:
+            debug_var = 1
+        # del fbx, boys
+
+        return ret3 # @DEBUG
+        # return ret
