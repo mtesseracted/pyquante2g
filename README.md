@@ -45,6 +45,7 @@
 
 
 ## @TODOs
+- add necessary funcs to run cart_gto tests
 - need to abstract the tensor.device method at least for tests
 - make cart_gto.py have alpha values that aren't full nd size
 - refactor so arb_math and ref_ints are one module with a chooseable back end

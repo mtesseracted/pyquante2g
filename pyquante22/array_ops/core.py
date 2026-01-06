@@ -15,6 +15,7 @@ math_ops_unary = [
 math_ops_binary = [
     "pow", 
     "gamma_inc", # not regularized
+    "maximum", "minimum",
 ]
 reduction_ops = [
     "sum", "prod",
@@ -23,6 +24,7 @@ reduction_ops = [
 creation_ops = ["eye",]
 manipulation_ops = [
     "reshape", "view", "broadcast_to", 
+    "transpose",
     "tile",
     "stack", "concat",
     "where", 

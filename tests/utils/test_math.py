@@ -3,6 +3,7 @@ import pytest
 import pyquante22.utils.math as math
 from math import factorial as py_factorial
 from math import isclose as py_isclose
+from math import pi, sqrt
 
 EPS = sys.float_info.epsilon
 def isclose(a, b, rel_tol=16*EPS, abs_tol=0.0):
@@ -47,21 +48,22 @@ def test_bionom_exact():
 
 
 def test_binom2_exact():
-    assert math.binom2_exact(0,0) == 1
-    assert math.binom2_exact(1,0) == 1
-    assert math.binom2_exact(1,1) == 0 # invalids are 0, same a binom()
-    assert math.binom2_exact(1,2) == 0
-    assert math.binom2_exact(2,1) == 2
-    assert math.binom2_exact(4,0) == 1
-    assert math.binom2_exact(4,1) == 12
-    assert math.binom2_exact(4,2) == 12
-    assert math.binom2_exact(4,3) == 0
-    assert math.binom2_exact(4,4) == 0
-    assert math.binom2_exact(4,5) == 0
+    assert math.binom2k_exact(0,0) == 1
+    assert math.binom2k_exact(1,0) == 1
+    assert math.binom2k_exact(1,1) == 0 # invalids are 0, same a binom()
+    assert math.binom2k_exact(1,2) == 0
+    assert math.binom2k_exact(2,1) == 2
+    assert math.binom2k_exact(4,0) == 1
+    assert math.binom2k_exact(4,1) == 12
+    assert math.binom2k_exact(4,2) == 12
+    assert math.binom2k_exact(4,3) == 0
+    assert math.binom2k_exact(4,4) == 0
+    assert math.binom2k_exact(4,5) == 0
 
 
 def test_gamma_half_int():
     # go up tp 80 for 4*amax; amax=20
+    sqpi = sqrt(pi)
     for n in range(80):
         expected = math.fact_exact(2*n -1, dn=2) / (2**n)
         assert isclose(math.gamma_half_int(n), expected)

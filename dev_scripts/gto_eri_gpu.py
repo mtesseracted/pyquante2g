@@ -617,5 +617,6 @@ if __name__ == "__main__":
 
     for r in result:
         print(f"{r.item():.15f}")
+    debug_var = 1
 
     debug_var = 1

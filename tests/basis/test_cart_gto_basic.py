@@ -196,3 +196,43 @@ def test_calc_h_array():
     # end for r1 in r_list:
 # end def test_calc_h_array():
 
+
+def test_norm_basic():
+    alpha = 1.0 # power of an s-type orbital
+    gamma = 2*alpha # orbital squared doubles exponent
+    # gamma = 1/(2*sigma^2) # relation of gamma to normal distro's sigma
+    sigma = 1.0 / np.sqrt(2*gamma)
+    n1d = np.pow(2*np.pi*sigma**2, -1/4) # sqrt again for half of the norm
+    n3d = n1d**3
+
+    ams = ao.arr([0,]*3, dtype=ao.int_dtype)
+    r0 = ao.arr([0,]*3)
+    aa = ao.arr([1,]*3)
+    ans = CGP(ams, r0, aa).norm
+    assert np.isclose(ans, n3d, rtol=16*EPS, atol=0)
+
+
+def test_norm_vs_overlap():
+    rtol, atol = 16*EPS, 0.0
+    ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
+    am1 = ao.arr([3, 1, 2], dtype=ao.int_dtype)
+    am2 = ao.arr([4, 2, 2], dtype=ao.int_dtype)
+    r0 = ao.arr([0, 0, 0])
+    rb = ao.arr([0.125, 0.25, 0.5])
+    rc = ao.arr([0.625, 0.125, 0.375])
+    rd = ao.arr([4.0, 1.0, 2.0])
+    am_list = [ams, am1, am2]
+    r_list = [r0, rb, rc, rd]
+    aa = ao.arr([0.25] * 3)
+
+    for r1 in r_list:
+        for a1 in am_list:
+            g1 = CGP(a1, r1, aa)
+            overlap = (g1*g1).calc_overlap()
+            oovesq = 1 / ao.sqrt(overlap) # should never get div 0
+            norm = g1.norm
+            passed = np.isclose(oovesq, norm, rtol=rtol, atol=atol)
+            perr = (oovesq - norm) / norm
+            assert passed, f"fail @ {str(g1)} %err: {perr:.4e}"
+# end def test_norm_vs_overlap():
+

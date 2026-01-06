@@ -3,8 +3,8 @@ import numpy as np
 from collections import Counter
 
 # local imports
-from elements import element_symbols, element_masses, element_radii, element_colors
-from utils.file_utils import read_xyz, read_mol, read_xyz_lines
+from pyquante22.utils.elements import element_symbols, element_masses, element_radii, element_colors
+from pyquante22.utils.file_utils import read_xyz, read_mol, read_xyz_lines
 
 # shorthands for array / linear alg ops so they can be changed easily
 # Possible libraries that could be supported:
@@ -77,7 +77,7 @@ class Molecule():
         if isinstance(data, list):
             self._init_from_atoms(data, **kwargs)
         elif isinstance(data, str):
-            self._init_from_file(data, **kwargs)
+            self._init_from_string(data, **kwargs)
         elif isinstance(data, dict):
             self._init_from_dict(data, **kwargs)
         else:
@@ -115,6 +115,13 @@ class Molecule():
 
         self._init_from_atoms(atoms, **{k:v for k,v in dic.items() if k != 'xyz'})
 
+    def _init_from_string(self, val):
+        if os.path.exists(val):
+            self._init_from_file(val)
+        else:
+            self._init_from_atoms(
+                read_xyz_lines(val.strip().splitlines())
+            )
 
     def _init_from_file(self, fname, format=None):
         if format == None:

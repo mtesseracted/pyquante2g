@@ -1,6 +1,6 @@
 from dataclasses import dataclass, replace
 import numpy as np
-from pyquante22.utils.math import binom_exact, binom2_exact, gamma_half_int
+from pyquante22.utils.math import binom_exact, binom2k_exact, gamma_half_int
 
 @dataclass
 class GTO:
@@ -50,7 +50,7 @@ class GTO:
 amax = 20  # max exponent for precomputed factorials
 arange_max = np.arange(6*amax+1) # 2 for pairs, 3 for 3d space
 binoms = np.asarray([[binom_exact(n,k) for k in range(2*amax+1)] for n in range(2*amax+1)])
-binom2s = np.asarray([[binom2_exact(n,k) for k in range(1*amax+1)] for n in range(2*amax+1)])
+binom2s = np.asarray([[binom2k_exact(n,k) for k in range(1*amax+1)] for n in range(2*amax+1)])
 ghalfs = np.asarray(gamma_half_int(n) for n in arange_max[:2*amax+1])   
 
 def norm2(a):

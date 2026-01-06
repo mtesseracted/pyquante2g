@@ -77,10 +77,17 @@ class TorchBackend(ArrayBackend):
             # a, b, groups=a.shape[0]
         ).squeeze(0)
 
-
-
     def tile(self, x, n):
         return torch.tile(x, dims=(n,))
+
+    def transpose(self, x, axes=None):
+        if axes is None:
+            if len(x.shape) == 2:
+                return torch.transpose(x, 0, 1)
+            else:
+                raise ValueError("transpose must specify axes for ndim>2")
+        else:
+            return torch.permute(x, dims=axes)
 #end class TorchBackend(ArrayBackend):
 
 backend_cls = TorchBackend

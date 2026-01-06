@@ -57,8 +57,6 @@ def find_sum_triplets(n):
         ii += len(b)
 
     return ret
-
-
 # end def find_sum_triplets(n):
 
 
@@ -74,6 +72,4 @@ def gen_cartesian_momentums(n):
         ii += len(ts)
 
     return ret
-
-
 # end def find_cartesian_momentums(n):

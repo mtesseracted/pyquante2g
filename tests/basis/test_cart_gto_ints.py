@@ -142,7 +142,7 @@ def gto_test_case(request):
     if request.param == "nai":
         return GTOTestCase(
             name="nai",
-            arity=4,
+            arity=3,
             arg_iter=lambda gs: ((g, gs[0], gs[0].cen) for g in gs[1:]),
             compute=lambda args: (
                 (args[0] * args[1]).calc_nai(args[2]).item(),

@@ -17,11 +17,18 @@ def binom_exact(n:int, k:int): # use python's arbitrary int
     return fact_exact(n) // (fact_exact(k) * fact_exact(n-k))
 
 
-def binom2_exact(n:int, k:int): # use python's arbitrary int
+def binom2k_exact(n:int, k:int): # use python's arbitrary int
     """ n! / (k! (n-2k)!)"""
     if 2*k > n:
         return 0
     return fact_exact(n) // (fact_exact(k) * fact_exact(n-2*k))
+
+
+def binom2n_exact(n:int, k:int):
+    """ (2n)! / (k! (n-k)!) """
+    if k > n:
+        return 0
+    return fact_exact(2*n) // (fact_exact(k) * fact_exact(n-k))
 
 
 def binom22_exact(i:int, r:int, u:int):

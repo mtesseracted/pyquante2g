@@ -1,6 +1,6 @@
 # import os, time
 from hashlib import sha256
-import pyquante22.utils.math as me  # math exact for combinatorials
+import pyquante22.utils.math as pm  # python math for combinatorials
 
 if True:
     import pyquante22.array_ops as arr
@@ -21,44 +21,41 @@ two = ao.arr(2)
 zero = ao.arr(0)
 half = ao.arr(0.5)
 pi = ao.arr(4) * ao.atan(one)
+sqpi = ao.sqrt(pi)
 eri_fac = (2 * one) * pow(pi, 2.5 * one)
 _parity = ao.arr([1, -1])  # (-1)^t = _parity[t%2]
 
 amax = 20  # s-type to y-type, highest I've seen is i-type in def2-universal.gbs
 arange_max = ao.arange(6 * amax + 1)  # 2 for pairs, 3 for 3d space
-# facts = ao.arr([me.fact_exact(a) for a in range(2*amax+1)])
+# facts = ao.arr([pm.fact_exact(a) for a in range(2*amax+1)])
+# fact2s = ao.arr([pm.fact_exact(n,dn=2) for n in range(2*amax+1)])
+dfact2n1s = ao.arr([pm.fact_exact(2*n-1,dn=2) for n in range(2*amax+1)]) # (2n-1)!!, double factorial of 2n-1
 binoms = ao.arr(
     [
-        [me.binom_exact(n, k) for k in range(2 * amax + 1)]
+        [pm.binom_exact(n, k) for k in range(2 * amax + 1)]
         for n in range(2 * amax + 1)
     ]
 )
 binom2s = ao.arr(
     [
-        [me.binom2_exact(n, k) for k in range(1 * amax + 1)]
+        [pm.binom2k_exact(n, k) for k in range(1 * amax + 1)]
         for n in range(2 * amax + 1)
     ]
 )
-binom22s = ao.arr( # this is too big, it's 141kB for amax=20
+binom2ns = ao.arr(
     [
-        [[me.binom22_exact(i, r, u) for u in range(1 * amax + 1)]
-        for r in range(1*amax+1)]
-        for i in range(2 * amax + 1)
+        [pm.binom2n_exact(n, k) for k in range(1 * amax + 1)]
+        for n in range(1 * amax + 1)
     ]
 )
-# we could calculate it from the binom's formula (see bion22_exact docstring)
-# but that formula has bare factorials, saying it's probably got
-# round off error, meaning we need to precompute once, then same problem...
-# other solution is to reformulat the NAI math to not need it, which
-# must be possible since ERI doesn't need it and it has more centers
 
+def binom22(i,r,u):
+    t = r + u
+    return binoms[i,2*t] * binom2ns[t,r]
 
-# ghalfs = ao.arr([me.gamma_half_int_exact(n) for n in range(2*amax+1)])
 def gamma_half_int(n): # 
-    """double factorial of 2n-1 over 2**n"""
-    return ao.exp(ao.lgamma(n + 0.5 * one)) / ao.sqrt(pi)
-
-
+    """Gamma(n+1/2) = sqrt(pi) * (2n-1)!! / 2**n """
+    return ao.exp(ao.lgamma(n + half)) #/ ao.sqrt(pi)
 ghalfs = gamma_half_int(ao.arr(arange_max[: 2 * amax + 1]))  # cast to default_dtype
 
 
@@ -110,6 +107,11 @@ def triple_conv_dot(
 # end def triple_conv_dot()
 
 
+# class CartGtoCont:
+#     """Cartesian GTO Contracted"""
+#     def __init__(self, )
+
+
 class CartGtoPrim:
     """Cartesian GTO Primitive"""
 
@@ -121,6 +123,7 @@ class CartGtoPrim:
         self.cen = cen  # float (batch*nd,)
         self.alpha = alpha  # float (batch*nd,) currently just repeated
         self.lmax = self.amom.max()
+        self.norm = self.calc_norm()
 
     def __len__(self):
         return len(self.amom)
@@ -130,7 +133,7 @@ class CartGtoPrim:
         return CartGtoPrimPair(self, other)
 
     def __add__(self, other):
-        """create a larger batch"""
+        """create a larger batch (not memory efficient)"""
         return CartGtoPrim(
             ao.concat([self.amom, other.amom]),
             ao.concat([self.cen, other.cen]),
@@ -196,9 +199,6 @@ class CartGtoPrim:
         id1 = id0 + self.nd
         ids = slice(id0, id1)
         ret = self.amom[ids], self.cen[ids], self.alpha[ids]
-        # if tolist:
-        #     ret = [ao.tolist(r) for r in ret]
-        #     ret[2] = ret[2][0] # only take 1 alpha if tolist
         return ret
 
     def calc_binoms(self, pab: ArrType, offset=None) -> ArrType:
@@ -223,6 +223,15 @@ class CartGtoPrim:
         ret[ao.broadcast_to(mask, ret.shape)] = zero
         return ret
     # end def calc_binoms()
+
+    def calc_norm(self):
+        """Normalize basis function. From THO eq. 2.2"""
+        norm2_1d = ao.pow(2*self.alpha, self.amom + half)
+        # norm2_1d /= ghalfs[self.amom] #* sqpi
+        norm2_1d *= ao.pow(2, self.amom) / (dfact2n1s[self.amom] * sqpi)
+        norm2 = ao.prod(norm2_1d.reshape(-1, self.nd), axis=1)
+        return ao.sqrt(norm2)
+
 # end class CartGtoPrim():
 
 
@@ -311,7 +320,8 @@ class CartGtoPrimPair:
             )
         bsz = (len(self) // self.nd, self.nd)  # batch size (shape tuple)
         ga, gb = self.ga, self.gb
-        ret = ao.sqrt(pi / self.gamma) * ao.exp(
+        # ret = ao.sqrt(pi / self.gamma) * ao.exp(
+        ret = ao.sqrt(one / self.gamma) * ao.exp(
             -ga.alpha * gb.alpha * ao.square(ga.cen - gb.cen) / self.gamma
         )
         ret = ret.reshape(bsz)  # ss overlap term, split into spatial dims
@@ -378,7 +388,7 @@ class CartGtoPrimPair:
 
         iuparity = _parity[(irng+urng)%2]
         terms = iuparity * bipres * cpows * gpows * \
-            binom22s[irng,rrng,urng]
+            binom22(irng,rrng,urng)
 
         # now I need to mask and then do the weird sum
         imask = (rrng <= ao.floor(irng/2)) & \
@@ -536,17 +546,25 @@ if __name__ == "__main__":
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     amx = ao.arr([-2, 0, 0], dtype=ao.int_dtype)
     amp = ao.arr([1, 0, 0], dtype=ao.int_dtype)
-    amn = ao.arr([n, 0, 0], dtype=ao.int_dtype)
+    amn = ao.arr([n, n+1, n+2], dtype=ao.int_dtype)
     r0 = ao.arr([0, 0, 0])
     rb = ao.arr([0.125, 0.25, 0.5])
     aa = ao.arr([1.0] * 3)
+    gn = CartGtoPrim(amn, r0, aa)
     gs = CartGtoPrim(ams, r0, aa)
     gx = CartGtoPrim(amx, r0, aa)
     gsb = CartGtoPrim(ams, rb, aa)
     gp = CartGtoPrim(amp, r0, aa)
-    gn = CartGtoPrim(amn, r0, aa)
     gnb = CartGtoPrim(amn, rb, aa)
     mys1 = str(gx)
+
+    import numpy as np
+    alpha = 1.0 # power of an s-type orbital
+    gamma = 2*alpha # orbital squared doubles exponent
+    # gamma = 1/(2*sigma^2) # relation of gamma to sigma
+    sigma = 1.0 / np.sqrt(2*gamma)
+    n1d = np.pow(2*np.pi*sigma**2, -1/4) # sqrt again for half of the norm
+    n3d = n1d**3
 
     gns = CartGtoPrimPair(gn, gs)
     tmp = (gnb*gsb).calc_nai(rb)
@@ -587,7 +605,7 @@ if __name__ == "__main__":
     tmp = gxs.calc_overlap()
     assert tmp == 0
     gt = aove(*cgpp2arb(gxs))
-    assert float(gt) == tmp.item()
+    assert float(gt) == tpm.item()
 
     gss = CartGtoPrimPair(gs, gs)
     gssb = CartGtoPrimPair(gs, gsb)
@@ -601,10 +619,10 @@ if __name__ == "__main__":
     ans = gss.calc_nai(gs.cen)
     ans = (gn*gnb).calc_nai(gnb.cen)
 
-    # tmp.binom_pres
+    # tpm.binom_pres
     # 1/65536,0,-1/128,0,1
     # tensor([[ 1.5259e-05,  0.0000e+00, -7.8125e-03,  0.0000e+00,  1.0000e+00],
-    # tmp.hab
+    # tpm.hab
     # 12161/65536,0,191/8192,1/4096
     # tensor([[1.8556e-01, 0.0000e+00, 2.3315e-02, 0.0000e+00, 2.4414e-04],
 

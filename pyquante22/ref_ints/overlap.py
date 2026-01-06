@@ -125,4 +125,19 @@ kinetic_funcs = [kinetic_hh12,]
 
 if __name__ == "__main__":
 
+    import numpy as np
+    alpha = 1.0 # power of an s-type orbital
+    gamma = 2*alpha # orbital squared doubles exponent
+    # gamma = 1/(2*sigma^2) # relation of gamma to sigma
+    sigma = 1.0 / np.sqrt(2*gamma)
+    n1d = np.pow(2*np.pi*sigma**2, -1/4) # sqrt again for half of the norm
+    n3d = n1d**3
+
+    ams = np.asarray([0,]*3, dtype=int)
+    r0 = np.asarray([0,]*3, dtype=float)
+    gs = GTO(l=ams, r=r0, a=1.0)
+    ans = overlap_hh12(gs, gs)
+
+    assert np.isclose(1/n3d**2, ans)
+
     debug_var = 1

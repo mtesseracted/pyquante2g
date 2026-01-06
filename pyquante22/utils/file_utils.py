@@ -49,7 +49,7 @@ def read_xyz(fname):
     return read_xyz_lines(lines)
 
 def read_xyz_lines(lines):
-    from atoms.elements import sym2no
+    from pyquante22.utils.elements import sym2no
     atuples = []
     for line in lines:
         if line.strip() == '': continue
@@ -71,7 +71,7 @@ def read_mol(fname):
     return read_mol_atom_lines(lines)
 
 def read_mol_atom_lines(lines):
-    from elements import sym2no
+    from pyquante22.utils.elements import sym2no # 
     atuples = []
     for line in lines:
         x,y,z, sym = parseline(line,'fffs')
@@ -83,20 +83,20 @@ def read_mol_atom_lines(lines):
 if __name__ == "__main__":
     import os
     from samples.samples import raw_samples
-    from molecule import Molecule
+    # from molecule import Molecule # circular import
 
     for raw_samp in raw_samples:
         atoms = read_xyz_lines(raw_samp.pop('xyz').splitlines())
-        mol = Molecule(atoms, **raw_samp)
-        print(f"{mol}")
+        # mol = Molecule(atoms, **raw_samp)
+        # print(f"{mol}")
 
     samp_files = [f for f in os.listdir('samples') if f.endswith(('.xyz', '.mol', '.sdf'))]
     for f in samp_files:
         if f.startswith('alum'):
             debug_var = 1
-        mol = Molecule.from_file(os.path.join('samples', f))
-        mol.name = f
-        print(f"{mol}")
+        # mol = Molecule.from_file(os.path.join('samples', f))
+        # mol.name = f
+        # print(f"{mol}")
 
 
     debug_var = 1
