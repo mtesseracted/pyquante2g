@@ -35,36 +35,36 @@ class DistanceMetric:
     def euclidean(self, x, y):
         return torch.linalg.norm((x - y).view(x.shape[0], -1), ord=2, dim=1)
 
-    def ssim(self, x, y, **kwargs):
-        from torchmetrics.functional import structural_similarity_index_measure
-        return 1. - structural_similarity_index_measure(x, y, reduction='none', **kwargs)
+    # def ssim(self, x, y, **kwargs):
+    #     from torchmetrics.functional import structural_similarity_index_measure
+    #     return 1. - structural_similarity_index_measure(x, y, reduction='none', **kwargs)
 
-    def lap1(self, x, y, level_weights=None):
-        from kornia.geometry.transform import build_laplacian_pyramid as blp
+    # def lap1(self, x, y, level_weights=None):
+    #     from kornia.geometry.transform import build_laplacian_pyramid as blp
 
-        max_level = int(torch.ceil(torch.log2(torch.as_tensor(min(x.shape[-1], x.shape[-2])) / 8)))
-        xlp = blp(x, max_level=max_level, border_type='reflect', align_corners=False)
-        ylp = blp(y, max_level=max_level, border_type='reflect', align_corners=False)
+    #     max_level = int(torch.ceil(torch.log2(torch.as_tensor(min(x.shape[-1], x.shape[-2])) / 8)))
+    #     xlp = blp(x, max_level=max_level, border_type='reflect', align_corners=False)
+    #     ylp = blp(y, max_level=max_level, border_type='reflect', align_corners=False)
 
-        xlp2 = [xp[:, :, :x.shape[-2] // 2 ** ii, :x.shape[-1] // 2 ** ii] for ii, xp in enumerate(xlp)]
-        ylp2 = [yp[:, :, :x.shape[-2] // 2 ** ii, :x.shape[-1] // 2 ** ii] for ii, yp in enumerate(ylp)]
+    #     xlp2 = [xp[:, :, :x.shape[-2] // 2 ** ii, :x.shape[-1] // 2 ** ii] for ii, xp in enumerate(xlp)]
+    #     ylp2 = [yp[:, :, :x.shape[-2] // 2 ** ii, :x.shape[-1] // 2 ** ii] for ii, yp in enumerate(ylp)]
 
-        l1_diffs = torch.cat(
-            [torch.linalg.norm((xp - yp).reshape(xp.shape[0], -1), ord=1, dim=1, keepdim=True)
-             for ii, (xp, yp) in enumerate(zip(xlp2, ylp2))],
-            dim=1)
+    #     l1_diffs = torch.cat(
+    #         [torch.linalg.norm((xp - yp).reshape(xp.shape[0], -1), ord=1, dim=1, keepdim=True)
+    #          for ii, (xp, yp) in enumerate(zip(xlp2, ylp2))],
+    #         dim=1)
 
-        if level_weights is None:
-            lp_weights = 2. ** (2 * torch.arange(max_level, dtype=x.dtype, device=x.device))
-        else:
-            lp_weights = level_weights
-        return torch.sum(l1_diffs * lp_weights[None, :], dim=1)
+    #     if level_weights is None:
+    #         lp_weights = 2. ** (2 * torch.arange(max_level, dtype=x.dtype, device=x.device))
+    #     else:
+    #         lp_weights = level_weights
+    #     return torch.sum(l1_diffs * lp_weights[None, :], dim=1)
 
-    def lapeuc(self, x, y, euclid_weight=0.5, level_weights=None):
-        if euclid_weight < 0.0 or euclid_weight > 1.0:
-            raise ValueError(f'Relative euclid_weigtht must be in range [0, 1]')
-        lap1_weight = 1.0 - euclid_weight
-        return 2. * (euclid_weight * self.euclidean(x, y) + lap1_weight * self.lap1(x, y, level_weights))
+    # def lapeuc(self, x, y, euclid_weight=0.5, level_weights=None):
+    #     if euclid_weight < 0.0 or euclid_weight > 1.0:
+    #         raise ValueError(f'Relative euclid_weigtht must be in range [0, 1]')
+    #     lap1_weight = 1.0 - euclid_weight
+    #     return 2. * (euclid_weight * self.euclidean(x, y) + lap1_weight * self.lap1(x, y, level_weights))
 
 
 def pdist2(x, y=None, distance='euclidean', batch_size=128, compute_device=None, progress=False):
@@ -154,6 +154,9 @@ if __name__ == '__main__':
     # t0 = dist(x, y, mydist)
     t1 = dm(x, y)
     # torch.allclose(t0, t1, atol=1e-10, rtol=1e-10)
+
+    y = torch.rand((11, 1, 40, 40))
+    dmat = pdist2(x, y)
 
     debug_var = 1
 

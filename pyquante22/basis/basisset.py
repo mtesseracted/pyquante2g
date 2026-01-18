@@ -101,12 +101,16 @@ def load_gbs_file(filename):
     return basis_dict
 #end def load_gbs_file(filename):
 
+
 def batch_expand(array, new_shape, flatten=True):
     """ expand the batch dimension of a flat array
     batch expand an array, assume it was 1D start, with spatial
     param: new_shape: multi-dim shape
     param: faltten: whether to flatten the return
+    ! DOESNT WORK
     """
+    if len(array.shape) != 1:
+        raise ValueError("Only works for 1D arrays")
     rshape = [1 for _ in new_shape]
     rshape[new_shape.index(-1)] = len(array)
 
@@ -149,6 +153,9 @@ class ContractedCartGto():
         if new_shape is not None:
             rshape = [1 for _ in new_shape] + [3,]
             new_shape = new_shape + [3,]
+            # amoms = batch_expand(amoms, new_shape)
+            # cens = batch_expand(cens, new_shape)
+            # alphas = batch_expand(alphas, new_shape)
             rshape[new_shape.index(-1)] = sz
             amoms = ao.broadcast_to(amoms.reshape(rshape), 
                 new_shape).reshape(-1)
@@ -169,16 +176,20 @@ class CartShell():
         self.alphas = alphas
         self.coeffs = coeffs
 
-    def __len__(self):
-        return len(self.alphas) # times size of shell?
+    def __len__(self): # nbf * npf (all possible primitives)
+        return self.nbf * self.npf
 
     @property
-    def nbf(self):
+    def nbf(self): # num basis funcs
         return ((self.amtot + 1) * (self.amtot + 2)) // 2
+
+    @property
+    def npf(self): # num primitive funcs (per basis func)
+        return len(self.alphas)
 
     def __repr__(self):
         scen = ','.join(f"{float(v):.2f}" for v in self.cen)
-        return f"{am2sym[self.amtot]} shell@ ({scen}) with {len(self)} primitives"
+        return f"{am2sym[self.amtot]}-shell @<{scen}> #{self.nbf}({self.npf})"
 
     @property
     def bfs(self):
@@ -203,6 +214,7 @@ class BasisSet():
         if basis_file is not None:
             basis_data = load_gbs_file(basis_file)
         else:
+            # @TODO: try to download from the basis set exchange
             raise ValueError(f"Cannot find the {name} basis set in {basis_dir}")
 
         self.name = os.path.basename(basis_file)[:-4]
@@ -226,8 +238,13 @@ class BasisSet():
         # return self.bfs.__getitem__(i)
         raise NotImplementedError()
 
-    def __repr__(self): return f"{self.name} for {self.molecule.hill_formula()} #{self.nbf}"
+    def __repr__(self): 
+        return f"{self.name} for {self.molecule.hill_formula()} #{self.nsh}({self.nbf})[{self.size}]"
     def __len__(self): return self.nbf
+    @property # number of shells
+    def nsh(self): return len(self.shells)
+    @property # all possible primitives
+    def size(self): return sum(len(s) for s in self.shells)
     def shell_bfs(self, idx):
         return self.bfs[self.shell_range[idx]]
     def atom_symbols(self,geo):
@@ -302,6 +319,27 @@ def eri_bf_loop(bfi, bfj, bfk, bfl): # type ContractedCartGto
 
     return ao.sum(cs * ns * eris)
 
+def build_j2_blocks(basis:BasisSet, cutoff_tol=1e-10):
+    # build the 2d J array max_{ij} (ij|ij) for each ij shell combo
+    # @TODO: build an octree or barnes-hut model of the moleucle,
+    # then only consider the interaction between atoms that are
+    # within a radius in sparse form (is order linear time)
+    nsh = len(basis.shells)
+    B = ao.zeros((nsh,nsh))
+    for i in range(len(basis.shells)):
+        for j in range(i+1):
+            bs = eri_shell(
+                basis.shells[i], basis.shells[j],
+                basis.shells[i], basis.shells[j],)
+            B[i,j] = ao.amax(bs)
+
+    bmax = ao.amax(B)
+    debug_var = 1
+    return B
+
+    
+
+
 
 def build_jk_blocks(basis:BasisSet):
     nbf = basis.nbf
@@ -331,6 +369,7 @@ def build_jk_blocks(basis:BasisSet):
 
 
 def fill_swap_symm(array, ids, vals):
+    """fill (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk)"""
     array[ids] = vals
     id2 = ids[1], ids[0], ids[2], ids[3]
     array[id2] = ao.transpose(vals, (1,0,2,3))
@@ -340,12 +379,14 @@ def fill_swap_symm(array, ids, vals):
     array[id2] = ao.transpose(vals, (1,0,3,2))
 
 def fill_eri_symm(array, ids, vals):
+    """fill (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk), repeat for (kl|ij)"""
     fill_swap_symm(array, ids, vals) # fill index swaps
     id2 = ids[2], ids[3], ids[0], ids[1]
     val2 = ao.transpose(vals, (2,3,0,1))
     fill_swap_symm(array, id2, val2) # fill pair swaps
 
 def inflate_4d(block, shape, ranges):
+    """inflate a 4d sparse block form (dict of blocks) into full size"""
     ret = ao.zeros(shape)
     for ijkl, vals in block.items():
         ids = tuple([ranges[i] for i in ijkl])
@@ -354,47 +395,89 @@ def inflate_4d(block, shape, ranges):
 
 
 if __name__ == "__main__":
-    # lstr = """\
-    #       0.1873113696D+02       0.3349460434D-01
-    #       0.2825394365D+01       0.2347269535D+00
-    #       0.6401216923D+00       0.8137573261D+00"""
-
     import time
     from pyquante22.atoms.molecule import Molecule
     from pyquante22.utils.file_utils import read_xyz_lines
 
+    def nsymm(n):
+        return n * (n+1) // 2
+    def nsymm8(n):
+        return nsymm(nsymm(n))
+
     xyzs = "F 1 0 0\nH -1 0 0"
     # xyzs = "H 1 0 0\nH -1 0 0"
-    m1 = Molecule(xyzs)
+    # m1 = Molecule(xyzs)
+    # b1 = BasisSet(m1, name='sto-3g')
+    m1 = Molecule("./samples/glycine.sdf")
+    print(f"Using molecule: {str(m1)}")
     b1 = BasisSet(m1, name='sto-3g')
+    print(f"with basis: {str(b1)} full J is {b1.nbf**4}, uniqs is {nsymm8(b1.nbf)}")
+
+    t0 = time.time()
+    Bj = build_j2_blocks(b1)
+    t1 = time.time()
+    print(f"Built screening J in {t1-t0:.2f}s")
+
+
+    def five_number_summary(data):
+        """ Compute min, 25th percentile, median, 75th percentile, max """
+        q75, q50, q25 = np.percentile(data, [75, 50, 25])
+        return np.stack([np.amin(data), q25, q50, q75, np.amax(data)])
+
+    nsh = len(b1.shells)
+    ti,tj = np.triu_indices(nsh)
+    Bjt = Bj[tj,ti].numpy()
+    assert len(Bjt) == (nsh*(nsh+1)//2)
+
+    for tol in [1e-6, 1e-8, 1e-10, 1e-12]:
+        mask = Bjt > tol
+        count = mask.sum()
+        print(f"{tol:.2e} {count} {count/len(Bjt):.4f}")
+
 
     t0 = time.time()
     Jb, Kb = build_jk_blocks(b1)
     t1 = time.time()
     print(f"Built JK blocks (nbf={b1.nbf}) in {t1-t0:.2f}s")
-    J = inflate_4d(Jb, [b1.nbf,]*4, b1.shell_range)
-    t2 = time.time()
-    print(f"Inflated J to 4d (nbf={b1.nbf}) in {t2-t1:.2f}s")
+    if b1.nbf < 20:
+        t0 = time.time()
+        J = inflate_4d(Jb, [b1.nbf,]*4, b1.shell_range)
+        t1 = time.time()
+        print(f"Inflated J to 4d (nbf={b1.nbf}) in {t1-t0:.2f}s")
+    debug_var = 1
 
-    gt = 0.7746059439198978 # from pyscf
-    ans = J[0,0,0,0].item()
+    # gt = 0.7746059439198978 # from pyscf
+    # ans = J[0,0,0,0].item()
 
-    basis_dir = 'basis/cart_gto_data'
-    basis_files = [f for f in os.listdir(basis_dir) if f.endswith('.gbs')]
+    if False:
+        basis_dir = 'basis/cart_gto_data'
+        basis_files = [f for f in os.listdir(basis_dir) if f.endswith('.gbs')]
 
-    file = 'sto-3g_h_he.gbs'
-    tmp = load_gbs_file(os.path.join(basis_dir, file))
+        file = 'sto-3g_h_he.gbs'
+        tmp = load_gbs_file(os.path.join(basis_dir, file))
 
-    file = '6-31g.gbs'
-    tmp = load_gbs_file(os.path.join(basis_dir, file))
+        file = '6-31g.gbs'
+        tmp = load_gbs_file(os.path.join(basis_dir, file))
 
-    file = 'mg3t.gbs'
-    tmp = load_gbs_file(os.path.join(basis_dir, file))
+        file = 'mg3t.gbs'
+        tmp = load_gbs_file(os.path.join(basis_dir, file))
 
-    file = 'mg3.gbs'
-    tmp = load_gbs_file(os.path.join(basis_dir, file))
+        file = 'mg3.gbs'
+        tmp = load_gbs_file(os.path.join(basis_dir, file))
 
-    file = 'def2-tzvp.gbs'
-    tmp = load_gbs_file(os.path.join(basis_dir, file))
+        file = 'def2-tzvp.gbs'
+        tmp = load_gbs_file(os.path.join(basis_dir, file))
 
-    d31gebug_var = 1
+    debug_var = 1
+
+    # the problem: the current functionality needs repmats with 
+    # exact batch matching between a,b,c, and d! quadruple stupid!
+    # the way I wrote pdist2 before was to use advanced indexing
+    # to get repeats when iterating over pairs to calc distance.
+    # so in order to reproduce that we need to support advanced
+    # indexing on ContrCartBasis and/or CartShell
+    # - note: in the PySEC code I use a meshgrid to generate indices,
+    # for this project I want to make it an iterator instead of
+    # actually allocating all indices into memory at once
+    # - also, we should make basis func pairs |ab), and reuse them
+    # when possible

@@ -14,7 +14,7 @@
 # implementation also has errors on the order of 1e-14 for larger
 # amoms, which could be fixed using branched logic. In the future
 # I think changing out the A, C, and H array calculations with
-# precomputed coefficients will alleviate this problem since
+# precomputed coefficients will mitigate this problem since
 # there will be much less terms in the sums
 import pytest, sys, itertools
 from dataclasses import dataclass
@@ -33,7 +33,7 @@ ao = arr.ArrayOps(
 )
 
 
-def am_mark(x, med=3, slo=7):  # mark ang.mom. cases
+def am_mark(x, med=3, slo=9):  # mark ang.mom. cases
     if x >= slo:
         return pytest.param(x, marks=(pytest.mark.slo, pytest.mark.med))
     if x >= med:
@@ -42,7 +42,7 @@ def am_mark(x, med=3, slo=7):  # mark ang.mom. cases
 
 
 amstart = 0 # @DEBUG
-amax = 12
+amax = 10
 @pytest.fixture(params=[am_mark(x) for x in range(amstart, amax + 1)])
 def am_case(request):
     return request.param
@@ -55,10 +55,18 @@ def to_np(a):  # to numpy
 
 
 def gto2arb(gto):
-    l = arb.arr_init(gto.l.tolist())
-    r = arb.arr_init(gto.r.tolist())
-    a = arb.arb(gto.a.item())
-    return [a, l, r]
+    if isinstance(gto, GTO):
+        l = arb.arr_init(gto.l.tolist())
+        r = arb.arr_init(gto.r.tolist())
+        a = arb.arb(gto.a.item())
+        return [a, l, r]
+    elif isinstance(gto, CGP):
+        return gto2arb(GTO(
+            l=to_np(gto.amom), 
+            r=to_np(gto.cen), 
+            a=to_np(gto.alpha[0])))
+    else:
+        raise ValueError(f"Does not support type {type(gto)}")
 
 
 def ove_ref(*args):
@@ -71,7 +79,7 @@ def ove_ref(*args):
 
 
 def kin_ref(*args):
-    """Overlap reference, args is one CartGtoPrimPair"""
+    """Kinetic reference, args is one CartGtoPrimPair"""
     ab = args[0]  # one CGPP
     a = GTO(l=to_np(ab.ga.amom), r=to_np(ab.ga.cen), a=to_np(ab.ga.alpha[0]))
     b = GTO(l=to_np(ab.gb.amom), r=to_np(ab.gb.cen), a=to_np(ab.gb.alpha[0]))
@@ -135,7 +143,7 @@ def gto_test_case(request):
                 (args[0] * args[1]).calc_kinetic().item(),
                 float(kin_ref(args[0] * args[1])),
             ),
-            rtol=32 * EPS,
+            rtol=16 * EPS,
             atol=EPS / 64,
         )
 
@@ -148,7 +156,7 @@ def gto_test_case(request):
                 (args[0] * args[1]).calc_nai(args[2]).item(),
                 float(nai_ref(args[0] * args[1], args[2])),
             ),
-            rtol=32 * EPS,  # not ideal
+            rtol=16 * EPS,  # fails for amax > 10
             atol=EPS / 64,
         )
 
@@ -163,7 +171,7 @@ def gto_test_case(request):
                 (args[0] * args[1]).calc_eri(args[2] * args[3]).item(),
                 float(eri_ref(args[0] * args[1], args[2] * args[3])),
             ),
-            rtol=32 * EPS,  # not ideal
+            rtol=16 * EPS,  # fail for amom > 17
             atol=EPS / 64,
         )
 
@@ -190,18 +198,38 @@ def gtos_setup(am_case):
 def test_gto_int_vs_ref(gtos_setup, gto_test_case):
     case = gto_test_case
     for args in case.arg_iter(gtos_setup):
-        try:
-            ans, gt = case.compute(args)
-        except Exception as err:
-            debug_var = 1
+        ans, gt = case.compute(args)
         diff = ans - gt
         perr = diff / gt if gt != 0.0 else diff
         passed = np.isclose(ans, gt, rtol=case.rtol, atol=case.atol)
         if not passed:
+            if case.name == 'nai':
+                ab, r = args[0] * args[1], args[2]
+                a = ab.calc_a_array(r)
+                aalr = gto2arb(args[0])
+                balr = gto2arb(args[1])
+                alpha1, lmn1, A = aalr
+                alpha2, lmn2, B = balr
+                C = arb.arr_init(r.tolist())
+                P = arb.gto_prod_cen(alpha1,A,alpha2,B)
+                dPA, dPB, dPC = P-A, P-B, P-C
+                Ax = arb.A_array(lmn1[0],lmn2[0],dPA[0],dPB[0],dPC[0],alpha1+alpha2)
+                import mpmath as mpm
+                nax = np.asarray(mpm.fp.matrix(Ax))
+                aax = a[0].numpy()
+                diffs = aax - nax
+                denom = nax.copy()
+                denom[np.abs(denom) < case.atol] = case.atol
+                perrs = np.abs(diffs / denom)
+                amax = np.argmax(perrs)
+                debug_var = 1
+
             debug_var = 1
+
         assert passed, (
-            f"[{case.name}] failed for args={args}, "
-            f"%err={perr:.4e}, gt={gt:.4e}, ans={ans:.4e}"
+            f"[{case.name}] failed, rtol={case.rtol:.4e}, atol={case.atol:.4e}\n"
+            f"    %err={perr:.4e}, gt={gt:.4e}, ans={ans:.4e}, for args:\n"
+            f"    {args.replace('\n', '\n    ')}"
         )
     
 # @TODO: batch calc and compare

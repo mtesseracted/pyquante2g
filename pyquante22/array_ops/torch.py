@@ -44,7 +44,7 @@ class TorchBackend(ArrayBackend):
 
     def stack(self, arrays, axis=0):
         # arrays should already be on the right device if created via this backend
-        return torch.stack(list(arrays), dim=axis)
+        return torch.stack(arrays, dim=axis)
 
     def tolist(self, x):
         # Bring to CPU for safety

@@ -44,8 +44,8 @@ def binom22_exact(i:int, r:int, u:int):
 
 
 def gamma_half_int(n): # 
-    """ (2n-1)!! / 2**n = Gamma(n+1/2) / sqrt(pi) """
-    return gamma(n + 0.5) / sqrt(pi)
+    """sqrt(pi) * (2n-1)!! / 2**n = Gamma(n+1/2)"""
+    return gamma(n + 0.5) #/ sqrt(pi)
 
 
 def _lower_gamma_small_x(a, x, eps=1e-16, max_iter=10000):

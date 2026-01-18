@@ -65,7 +65,7 @@ def test_gamma_half_int():
     # go up tp 80 for 4*amax; amax=20
     sqpi = sqrt(pi)
     for n in range(80):
-        expected = math.fact_exact(2*n -1, dn=2) / (2**n)
+        expected = sqpi * math.fact_exact(2*n -1, dn=2) / (2**n)
         assert isclose(math.gamma_half_int(n), expected)
 
 

@@ -29,7 +29,8 @@ amax = 20  # s-type to y-type, highest I've seen is i-type in def2-universal.gbs
 arange_max = ao.arange(6 * amax + 1)  # 2 for pairs, 3 for 3d space
 # facts = ao.arr([pm.fact_exact(a) for a in range(2*amax+1)])
 # fact2s = ao.arr([pm.fact_exact(n,dn=2) for n in range(2*amax+1)])
-dfact2n1s = ao.arr([pm.fact_exact(2*n-1,dn=2) for n in range(2*amax+1)]) # (2n-1)!!, double factorial of 2n-1
+# dfact2n1s = ao.arr([pm.fact_exact(2*n-1,dn=2) for n in range(2*amax+1)]) # (2n-1)!!, double factorial of 2n-1
+ghalfs = ao.arr([pm.gamma_half_int(n) for n in range(2*amax+1)]) # more exact than exp(lgamma)
 binoms = ao.arr(
     [
         [pm.binom_exact(n, k) for k in range(2 * amax + 1)]
@@ -50,17 +51,22 @@ binom2ns = ao.arr(
 )
 
 def binom22(i,r,u):
+    """ i! / (r! u! (i-2(r+u))!) """
+    # this one is a function using the form factored into 
+    # binomials so we're not storing a 3d array, which would 
+    # be 141kB in float64 with amax=20 (i=[0,2*mx+1], r,u=[0,mx+1])
     t = r + u
     return binoms[i,2*t] * binom2ns[t,r]
 
-def gamma_half_int(n): # 
-    """Gamma(n+1/2) = sqrt(pi) * (2n-1)!! / 2**n """
-    return ao.exp(ao.lgamma(n + half)) #/ ao.sqrt(pi)
-ghalfs = gamma_half_int(ao.arr(arange_max[: 2 * amax + 1]))  # cast to default_dtype
 
+def fboys0(m2, x):
+    """series expansion around x=0"""
+    # expansion around x=0: (1 / (2*m + 1)) - (x / (2*m + 3)) + (x**2 / 6*(2*m + 5))
+    # (0.5 / m2) - (0.5*x / (m2+1)) + (0.5*x*x / (m2+2))/6
+    return 0.5 / m2 - 0.5 * x / (m2 + one)
 
 def fboys(m, x):  # stable @ x=0
-    # expansion around x=0: (1 / (2*m + 1)) - (x / (2*m + 3)) + (x**2 / 6*(2*m + 5))
+    """boys function"""
     m2 = m + 0.5 * one
     ret = 0.5 * pow(x, -m2) * ao.gamma_inc(m2, x)
     mask = x < ao.xp.finfo(x.dtype).eps
@@ -105,11 +111,6 @@ def triple_conv_dot(
     # return th.linalg.vecdot(ax, c, dim=1)   # (B,)
     return ao.einsum('ij,ij->i', ax, c)
 # end def triple_conv_dot()
-
-
-# class CartGtoCont:
-#     """Cartesian GTO Contracted"""
-#     def __init__(self, )
 
 
 class CartGtoPrim:
@@ -227,8 +228,8 @@ class CartGtoPrim:
     def calc_norm(self):
         """Normalize basis function. From THO eq. 2.2"""
         norm2_1d = ao.pow(2*self.alpha, self.amom + half)
-        # norm2_1d /= ghalfs[self.amom] #* sqpi
-        norm2_1d *= ao.pow(2, self.amom) / (dfact2n1s[self.amom] * sqpi)
+        norm2_1d /= ghalfs[self.amom] #* sqpi
+        # norm2_1d *= ao.pow(2, self.amom) / (dfact2n1s[self.amom] * sqpi)
         norm2 = ao.prod(norm2_1d.reshape(-1, self.nd), axis=1)
         return ao.sqrt(norm2)
 
@@ -401,9 +402,12 @@ class CartGtoPrimPair:
         ret = ao.zeros((full_sz[0], full_sz[1]+1))
         ret.scatter_add_(dim=1, index=sum_idx_batch, src=terms_flat)
 
-        ret = ret[:, :-1] # get rid of the dummy sum
-        mask = (abmom < irng)[:,:,0,0] # invalids, squeeze
-        ret[:] = ao.where(mask, ao.arr(0), ret)
+        ret = ret[:, :-1] # get rid of the dummy sum (can have NaNs)
+        # bug?
+        # mask = (abmom < irng)[:,:,0,0] # invalids, squeeze
+        # ret[:] = ao.where(mask, ao.arr(0), ret)
+        # mask = abmom[:,None] < irng[:,:,0,0] # (B,1) < (1,L) => (B,L), same as ret
+        # ret[mask] = zero # in practice I found these are already 0
         return ret
 
 
@@ -457,6 +461,7 @@ class CartGtoPrimPair:
 
     # end def calc_h_array(self, other):
 
+
     def calc_c_array(self, other: "CartGtoPrimPair") -> ArrType:
         # ga, gb, gc, gd = self.ga, self.gb, other.ga, other.gb
         hab, hcd = self.hab, other.hab
@@ -508,20 +513,17 @@ class CartGtoPrimPair:
         nd = self.nd
         bsz = len(self) // nd
         gab, gcd = self.gamma[:], other.gamma[:]
-        # tmp = ao.empty(bsz)
-        # self.deltas = 0.25 * (one/self.gamma + one/other.gamma)
         self.deltas = 0.25 * (one / gab + one / gcd)
         c_array = (
             self.calc_c_array(other).view(bsz, nd, -1).transpose(0, 1)
         )  # .contiguous()
 
-        # delta = o4 / gab + o4 / gcd
         qp2 = ao.pow(self.pab - other.pab, 2 * one).reshape(-1, nd).sum(axis=1)
         fbx = 0.25 * qp2 / self.deltas[::nd]
         ijkmax = 3 * c_array.shape[-1]  # @TODO get actual max needed
         boys = fboys(arange_max[: ijkmax + 1][None, :], fbx[:, None])
         ret = triple_conv_dot(c_array[0], c_array[1], c_array[2], boys)
-        del fbx, boys
+        del fbx, boys, self.deltas
 
         aa, ab = self.ga.alpha[::nd], self.gb.alpha[::nd]
         ac, ad = other.ga.alpha[::nd], other.gb.alpha[::nd]
@@ -567,7 +569,7 @@ if __name__ == "__main__":
     n3d = n1d**3
 
     gns = CartGtoPrimPair(gn, gs)
-    tmp = (gnb*gsb).calc_nai(rb)
+    # tmp = (gnb*gsb).calc_nai(rb)
     tmp = gns.calc_overlap()
     mys2 = str(gn)
 
@@ -605,7 +607,7 @@ if __name__ == "__main__":
     tmp = gxs.calc_overlap()
     assert tmp == 0
     gt = aove(*cgpp2arb(gxs))
-    assert float(gt) == tpm.item()
+    assert float(gt) == tmp.item()
 
     gss = CartGtoPrimPair(gs, gs)
     gssb = CartGtoPrimPair(gs, gsb)
@@ -616,8 +618,15 @@ if __name__ == "__main__":
 
     tmp = gn * gnb
 
-    ans = gss.calc_nai(gs.cen)
-    ans = (gn*gnb).calc_nai(gnb.cen)
+    # ans = gss.calc_nai(gs.cen)
+    # ans = (gn*gnb).calc_nai(gnb.cen)
+
+
+    gas = [gs,  gsb, gnb, gnb, gnb]
+    gbs = [gp,  gn,  gnb,  gp, gsb]
+    gpp = CartGtoPrimPair(sum(gas), sum(gbs))
+    ans = gpp.calc_nai(ao.tile(rb, len(gas)))
+
 
     # tpm.binom_pres
     # 1/65536,0,-1/128,0,1

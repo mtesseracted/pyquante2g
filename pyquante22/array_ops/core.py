@@ -87,6 +87,11 @@ class ArrayBackend:
             dtype = self.default_dtype
         return self.xp.zeros(shape, dtype=dtype)
 
+    def ones(self, shape, dtype=None):
+        if dtype is None:
+            dtype = self.default_dtype
+        return self.xp.ones(shape, dtype=dtype) # BUG? no device
+
     def arange(self, start, stop=None, step=1, dtype=None):
         # infer dtype from args if not given
         if stop is None:

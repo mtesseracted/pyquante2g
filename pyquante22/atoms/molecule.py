@@ -119,9 +119,14 @@ class Molecule():
         if os.path.exists(val):
             self._init_from_file(val)
         else:
-            self._init_from_atoms(
-                read_xyz_lines(val.strip().splitlines())
-            )
+            try:
+                self._init_from_atoms(
+                    read_xyz_lines(val.strip().splitlines())
+                )
+            except:
+                if (os.sep not in val) and (len(val) > 72): # assume not a path
+                    val = f"{val.replace('\n','\\n')[:70]} ..." # truncate for printing
+                raise ValueError("Could not intialize from string as file or xyz lines:\n{val}")
 
     def _init_from_file(self, fname, format=None):
         if format == None:
