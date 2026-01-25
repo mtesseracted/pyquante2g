@@ -26,6 +26,7 @@ class NumpyBackend(ArrayBackend):
             np.convolve(sig, ker, mode='full') 
             for sig, ker in zip(a, b)
         ])
+
 #end class NumpyBackend(ArrayBackend):
 
 

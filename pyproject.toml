@@ -23,6 +23,7 @@ test = ["pytest","scipy",
     "mpmath"]
 figs = ["matplotlib"]
 #docs = ["sphinx"]           # documentation tools
+all = ["gpu","dev","test","figs"]
 
 [tool.black]
 line-length = 82

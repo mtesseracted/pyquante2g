@@ -11,6 +11,7 @@ math_ops_unary = [
     "abs", "sign",
     "round", "floor", "ceil",
     "lgamma",
+    "cumprod",
 ]
 math_ops_binary = [
     "pow", 
@@ -28,10 +29,14 @@ manipulation_ops = [
     "tile",
     "stack", "concat",
     "where", 
+    "take_along_axis",
+    "scatter_add",
+    "pad",
 ]
 misc_ops = [
     "unique", # call this a reduction?
     "einsum",
+    "conv1d",
 ]
 basic_ops = sum([
     math_ops_unary, 
@@ -118,7 +123,7 @@ class ArrayBackend:
         """
         seq = self.tolist(x)
         combs = list(_combinations(seq, r))
-        return self.asarray(combs)
+        return self.asarray(combs, dtype=x.dtype)
 
     # ---------- other ----------
 

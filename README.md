@@ -45,9 +45,9 @@
 
 
 ## @TODOs
-- add necessary funcs to run cart_gto tests
+- ~~add necessary funcs to run cart_gto tests~~
 - need to abstract the tensor.device method at least for tests
-- make cart_gto.py have alpha values that aren't full nd size
+- ~~make cart_gto.py have alpha values that aren't full nd size~~
 - refactor so arb_math and ref_ints are one module with a chooseable back end
 - make analysis scripts for accuracies of: fboys, methods acc.
 and time (e.g. HT95 vs THO66 for NAI)
@@ -56,6 +56,7 @@ and time (e.g. HT95 vs THO66 for NAI)
 version of JIT instead of decoratores, e.g. torch.script(), jax.jit(),
 cupy is questionable?, tf.function()
     - cupy can use cp.RawKernel(), but it takes a string, not a function
+- add tests for Molecule class, test NN energy, and marble test all init methods
 
 
 ## Future Ideas

@@ -88,6 +88,19 @@ class TorchBackend(ArrayBackend):
                 raise ValueError("transpose must specify axes for ndim>2")
         else:
             return torch.permute(x, dims=axes)
+
+    def take_along_axis(self, x, indices, axis=None):
+        return torch.take_along_dim(x, indices, dim=axis)
+
+    def scatter_add_inplace(self, x, axis, index, src):
+        # note: torch.scatter_reduce is more general and can 
+        # do any ufunc, not just add
+        return x.scatter_add_(dim=axis, index=index, src=src)
+
+    def pad(self, x, pad_width, mode="constant", constant_values=0):
+        # pad_width is list of (before, after) for each axis
+        return F.pad(x, pad=pad_width, mode=mode, value=constant_values)
+
 #end class TorchBackend(ArrayBackend):
 
 backend_cls = TorchBackend

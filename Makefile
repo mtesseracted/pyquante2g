@@ -11,8 +11,8 @@ clean:
 	find . -name "*.egg-info" -type d -exec rm -rf {} +
 
 # Editable install
-install:
-	pip3 install -e .
+install:s
+	pip3 install -e ".[all]""
 
 PKG := $(notdir $(shell pwd))
 uninstall:

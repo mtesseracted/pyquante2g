@@ -3,40 +3,9 @@ import numpy as np
 from collections import Counter
 
 # local imports
+import pyquante22.array_ops as arr
 from pyquante22.utils.elements import element_symbols, element_masses, element_radii, element_colors
 from pyquante22.utils.file_utils import read_xyz, read_mol, read_xyz_lines
-
-# shorthands for array / linear alg ops so they can be changed easily
-# Possible libraries that could be supported:
-# numpy, cupy, pytorch, tensorflow, jax
-# - dont make aliases for them all, just support numpy and 1 more,
-#   then put all the alias'd things in 1 file and users can change that
-# - need to alias full_like or maybe something new that can also take shape
-# try:
-#     import torch as ch
-#     arr_dtype = ch.float64
-#     arr_init = ch.as_tensor
-#     arr_stack = ch.stack
-#     arange = ch.arange
-#     la_norm = ch.linalg.norm
-#     arr_min = lambda arr, axis=None: ch.amin(arr, dim=axis)
-#     arr_max = lambda arr, axis=None: ch.amax(arr, dim=axis)
-#     numpy = lambda arr: arr if isinstance(arr, np.ndarray) else arr.numpy()
-#     arr2list = lambda arr: numpy(arr).tolist()
-#     combos = ch.combinations
-# except:
-if True:
-    from itertools import combinations
-    arr_dtype = float
-    arr_init = np.asarray
-    arr_stack = np.stack
-    arange = np.arange
-    la_norm = np.linalg.norm
-    arr_min = lambda arr, axis=None: np.amin(arr, axis=axis)
-    arr_max = lambda arr, axis=None: np.amax(arr, axis=axis)
-    numpy = lambda arr: arr if isinstance(arr, np.ndarray) else arr.numpy()
-    arr2list = lambda arr: numpy(arr).tolist()
-    combos = combinations
 
 
 class Atom():
@@ -44,16 +13,17 @@ class Atom():
     xyz position is assumed to be in bohr
     """
 
-    def __init__(self, atno, x, y, z, **kwargs):
+    def __init__(self, atno, x, y, z, ao=None):
+        self.ao = ao or arr.get_default_ops()
         self.atno = int(round(atno))
         self.Z = atno
-        self.r = arr_init([x,y,z], dtype=arr_dtype)
-        return
+        self.r = self.ao.arr([x,y,z])
 
-    def atuple(self): return (self.atno,*self.r.tolist())
+    def atuple(self): 
+        return (self.atno, *self.ao.tolist(self.r))
 
     def __repr__(self): return "%d %s %12.6f %12.6f %12.6f" % (
-        self.atno,element_symbols[self.atno],*arr2list(self.r))
+        self.atno,element_symbols[self.atno],*self.ao.tolist(self.r))
     
     def __getitem__(self, i): return self.r[i]
 
@@ -61,7 +31,7 @@ class Atom():
     def radius(self): return element_radii[self.atno]
     def symbol(self): return element_symbols[self.atno]
     def color(self): return element_colors[self.atno]
-    def distance(self,other): return la_norm(self.r-other.r)
+    def distance(self,other): return self.ao.norm(self.r-other.r)
 #end class Atom():
 
 
@@ -73,7 +43,8 @@ class Molecule():
     _bohr2ang = 0.529177249  # Conversion of length from bohr to angstrom
     _ang2bohr = 1.0 / _bohr2ang
 
-    def __init__(self, data,**kwargs):
+    def __init__(self, data, ao=None, **kwargs):
+        self.ao = ao or arr.get_default_ops()
         if isinstance(data, list):
             self._init_from_atoms(data, **kwargs)
         elif isinstance(data, str):
@@ -192,7 +163,7 @@ class Molecule():
         return self
 
     def atom_coords(self):
-        return arr_stack([at.r for at in self.atoms])
+        return self.ao.stack([at.r for at in self.atoms])
     def atom_symbols(self):
         return [at.symbol() for at in self.atoms]
     def atom_colors(self):
@@ -201,9 +172,9 @@ class Molecule():
 
     def bbox(self, padding=2.,):
         atom_coords = self.atom_coords()
-        mins = arr_min(atom_coords, axis=0) - padding
-        maxs = arr_max(atom_coords, axis=0) + padding
-        return arr_stack([mins, maxs]).T
+        mins = self.ao.amin(atom_coords, axis=0) - padding
+        maxs = self.ao.amax(atom_coords, axis=0) + padding
+        return self.ao.stack([mins, maxs]).T
 
     def approx_bonds(self,scale=1.1):
         """ find bonds for inter-atom distance < sum of Van der Walls radii """
@@ -216,11 +187,11 @@ class Molecule():
         return bonds
 
     def nuclear_repulsion(self):
-        ats = self.atoms
-        if len(ats) < 2: return arr_init(0.0)
-        return arr_stack([
+        ats, combos = self.atoms, self.ao.combinations
+        if len(ats) < 2: return self.ao.arr(0.0)
+        return self.ao.stack([
             ats[ii].Z * ats[jj].Z / ats[ii].distance(ats[jj]) 
-            for ii, jj in combos(arange(len(self)), 2)
+            for ii, jj in combos(self.ao.arange(len(self)), 2)
         ]).sum()
 
     def xyz(self,title=None,fobj=None):
@@ -230,7 +201,7 @@ class Molecule():
         lines = ["%d" % len(self.atoms),"%s" % title]
         for atom in self.atoms:
             fstr = "{:4d} " + " ".join("{:12.6f}")
-            axyz = arr2list(atom.r * self._bohr2ang)
+            axyz = self.ao.tolist(atom.r * self._bohr2ang)
             lines.append(fstr.format(element_symbols[atom.atno], *axyz))
         record = "\n".join(lines)
         if fobj:
@@ -247,7 +218,7 @@ class Molecule():
         def html_row(table, atom, i=0):
             """ Add a row in a table for an html representation of an atom """
             tr = ET.SubElement(table,"tr")
-            xyz = arr2list(atom.r)
+            xyz = self.ao.tolist(atom.r)
             vals = [str(i+1), str(atom.atno), *[f"{r:.6f}" for r in xyz]]
             for val in vals:
                 td = ET.SubElement(tr,"td")
@@ -285,14 +256,31 @@ if __name__ == "__main__":
     import os
     import numpy as np
     import matplotlib.pyplot as plt
-    from samples.samples import raw_samples, taxol_raw, raw_drugs
-    from utils.file_utils import read_xyz_lines
-    from utils.plotting_utils import plot_molecule_3d, plot_molecule_3d_scatter
+    from importlib import resources
+    import importlib.util
+    # from samples.samples import raw_samples, taxol_raw, raw_drugs
+    from pyquante22.utils.file_utils import read_xyz_lines
+    from pyquante22.utils.plotting_utils import plot_molecule_3d, plot_molecule_3d_scatter
+
+    sample_dir = resources.files("pyquante22").joinpath("..","samples")
+    module_path = sample_dir / "samples.py"
+    module_name = "samples.samples"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    raw_samples = module.raw_samples
+    taxol_raw = module.taxol_raw
+    raw_drugs = module.raw_drugs
 
     samp_files = [os.path.join('samples',f) 
                   for  f in os.listdir('samples') 
                   if f.endswith(('.xyz', '.mol', '.sdf'))]
     molecules = [Molecule(samp) for samp in raw_samples + samp_files]
+
+    def numpy(x):
+        if hasattr(x, "numpy"):
+            return x.numpy()
+        return np.asarray(x)
 
     for mol in molecules:
         print(f"{mol}")

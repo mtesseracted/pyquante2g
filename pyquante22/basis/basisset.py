@@ -3,6 +3,7 @@ import itertools
 import numpy as np
 from importlib import resources
 from pyquante22.utils.elements import element_symbols
+from pyquante22.utils.file_utils import find_closest_file_match, load_gbs_file
 from pyquante22.basis.cart_gto_utils import am2sym, sym2am, gen_cartesian_momentums
 from pyquante22.basis.cart_gto import CartGtoPrim, CartGtoPrimPair
 
@@ -10,96 +11,6 @@ from pyquante22.basis.cart_gto import CartGtoPrim, CartGtoPrimPair
 # http://www.basissetexchange.org/api/basis/sto-3g/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54
 # http://www.basissetexchange.org/api/basis/cc-pvdz/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36
 # http://www.basissetexchange.org/basis/cc-pvdz/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36
-
-
-def find_closest_file_match(path, filename):
-    """find the file that is the closest match to filename in path"""
-    files = os.listdir(path)
-    if filename in files: # exact match
-        return os.path.join(path, filename)
-
-    def remove_chars(word, remove):
-        return "".join(ch for ch in word if ch not in set(remove))
-
-    # try with all lowercase and removed special chars
-    remove = ' _.-'
-    ext = '.' + filename.split('.')[-1]
-    name2 = remove_chars(filename.lower().replace(ext,''), remove)
-    files2 = [remove_chars(f.lower().replace(ext,''), remove) for f in files]
-    for icut in range(4): # try cutting up to 3 letters off the end
-        name3 = name2[:-icut] if icut > 0 else name2
-        if name3 in files2:
-            return os.path.join(path, files[files2.index(name2)])
-
-    return None
-
-
-
-def load_gbs_file(filename):
-    """ returns a dict, with elements symbols as keys,
-    with entries being a list of tuples with (amom, gto_data)
-    where gto_data is an array of size (num_primitives, 2),
-    and [:,0] are the primitive exponents and [:,1] are the primitive coeffs
-    """
-    with open(filename, 'r') as ifd:
-        lines = ifd.readlines()
-
-    def strip_non_alpha(s):
-        return ''.join([ss for ss in s if ss.isalpha()])
-
-    basis_dict = {}
-    curr_element = ''
-    curr_gtos = []
-    icnt = 0
-    while icnt < len(lines):
-        line = lines[icnt]
-        icnt += 1
-        ls = line.strip()
-        if ls == '' or ls[0] in ('#', '!'): continue
-        if ls == '****':
-            if len(curr_gtos) > 0 and curr_element != '':
-                basis_dict[curr_element] = curr_gtos
-            curr_element = ''
-            curr_gtos = []
-            continue
-        elif 'ecp' in line.lower():
-            print(f"::WARN:: ECP data found in {filename}, returning early")
-            return basis_dict
-
-        try:
-            lss = ls.split()
-            if curr_element == '':
-                curr_element = strip_non_alpha(lss[0])
-                ecp = int(lss[1]) if len(lss) > 1 else 0
-                if ecp != 0:
-                    raise ValueError("Only ECP=0 supported currently")
-            elif lss[0].isalpha(): # orbital type
-                am = strip_non_alpha(lss[0].upper())
-                fac = float(lss[2]) if len(lss) > 2 else 1.0
-                gcnt = int(lss[1])
-                gto_lines = lines[icnt:icnt+gcnt]
-                icnt += gcnt
-                str_data = [[ll.upper().replace('D','E') for ll in l.split()] 
-                            for l in gto_lines]
-                gto_data = np.asarray(str_data, dtype=float)
-
-                for ij, j in enumerate(am):
-                    exps = gto_data[:, 0]
-                    coeffs = gto_data[:, ij+1] * fac
-                    curr_gtos.append((j, np.stack([exps, coeffs], axis=1)))
-            else:
-                raise ValueError("::ERR::(load_gbs_file) unknown line type or malformed file")
-        except Exception as e:
-            print("::ERR::(load_gbs_file) unhandled Exception, re-rasing")
-            raise e
-    #end while
-
-    # possibly didn't have last '****'
-    if curr_element != '' and curr_element not in basis_dict:
-        basis_dict[curr_element] = curr_gtos
-
-    return basis_dict
-#end def load_gbs_file(filename):
 
 
 def batch_expand(array, new_shape, flatten=True):

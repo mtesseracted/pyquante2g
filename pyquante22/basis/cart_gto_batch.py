@@ -850,6 +850,21 @@ if __name__ == "__main__":
     loops = 100
     g1 = CartGtoPrimPair(sum(gas*1), sum(gbs[:-1]*2))
     g2 = CartGtoPrimPair(sum(gas[:-2]*2), sum(gbs[:-1] + gas[:3]))
+
+
+    gaslong = gas*10
+    gbslong = gbs*10
+    times = []
+    for ii in range(1,16):
+        gab = sum(gaslong[:ii]) * sum(gbslong[:ii])
+        gcd = sum(gbslong[:ii]) * sum(gaslong[:ii])
+        t0 = time.time()
+        for _ in range(loops):
+            ans = gab.calc_c_array_v4(gcd)
+        t1 = time.time()
+        print(f"time for {loops} loops with npf={ii:02d}: {t1-t0:.2f}s")
+        times.append([ii,t1-t0])
+    
     # tmp = g1.debug_c_calc(g2)
     # tmp = ((gn+gsb)*gmb).setup_c_calc(gs*(gn+gp+gs))
     # tmp = g1[-1,-1].setup_c_calc(g2[-1,-1])
@@ -901,3 +916,39 @@ if __name__ == "__main__":
 
 
     debug_var = 1
+
+    # def calc_binoms(self, pab, offset=None):
+    #     """Compute binomial expansion coeffs given a center.
+    #     pab:    (B,nd) or (B,C,nd)
+    #     offset: (nd,) optional; shifts angular momentum (used in kinetic)
+    #     returns: (B,nd,L) or (B,C,nd,L) where L = lmax+1
+    #     ret[..., i] = binom(l, i) * (pab-cen)^(l-i)
+    #     """
+    #     ao, co, gm = self.ao, self.co, self.gm
+    #     keepC = (pab.ndim == 3)
+    #     pab3  = pab if keepC else pab[:, None, :]          # (B,C,nd)
+    #     B, C, nd = pab3.shape
+    #     assert (B == len(self)) and (self.nd == nd), f"P_ab size mismatch"
+
+    #     if offset is None: # l: (B,nd), apply offset if present
+    #         l = self.amom
+    #         lmax = self.lmax
+    #     else:
+    #         l = self.amom + offset[None,:]
+    #         lmax = int(max(0, l.max().item()))
+
+    #     L = lmax + 1
+    #     irng = co.arange_max[:L]                            # (L,)
+    #     xG = (pab3 - self.cen[:, None, :]).reshape(-1)      # (G,)
+    #     lG = ao.broadcast_to(l[:, None, :], (B, C, nd)).reshape(-1) # (G,)
+    #     xpow = gm.pow_ladder(xG, L) # xG[g]^k, k=0..L-1;    # (G,L)
+    #     l_safe = lG #ao.where(lG < 0, co.izero, lG)             # (G,)
+    #     exp   = l_safe[:, None] - irng[None, :]             # (G,L)
+    #     valid = (lG[:, None] >= 0) & (exp >= 0)             # (G,L)
+    #     exp[exp<0] = co.izero
+
+    #     retG = ao.take_along_axis(xpow, exp, axis=1)
+    #     retG *= co.binoms[l_safe[:, None], irng[None, :]]
+    #     retG = ao.where(valid, retG, co.zero)
+    #     ret = retG.reshape(B, C, nd, L)
+    #     return ret if keepC else ret[:, 0, :, :]

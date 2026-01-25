@@ -1,266 +1,359 @@
 # import os, time
 from hashlib import sha256
+
+#local imports
 import pyquante22.utils.math as pm  # python math for combinatorials
-
-if True:
-    import pyquante22.array_ops as arr
-
-    # get an instance of ArrayOps
-    ao = arr.ArrayOps(
-        "torch", device="cpu", default_dtype="float64", int_dtype="int64"
-    )
-    ao.conv1d = ao.xp.nn.functional.conv1d  # @DEBUG
-else:
-    import pyquante22.array_ops as ao
-
-    ao.conv1d = ao.conv_full_batch  # nope
-
-ArrType = ao.ArrayType
-one = ao.arr(1)
-two = ao.arr(2)
-zero = ao.arr(0)
-half = ao.arr(0.5)
-pi = ao.arr(4) * ao.atan(one)
-sqpi = ao.sqrt(pi)
-eri_fac = (2 * one) * pow(pi, 2.5 * one)
-_parity = ao.arr([1, -1])  # (-1)^t = _parity[t%2]
-
-amax = 20  # s-type to y-type, highest I've seen is i-type in def2-universal.gbs
-arange_max = ao.arange(6 * amax + 1)  # 2 for pairs, 3 for 3d space
-# facts = ao.arr([pm.fact_exact(a) for a in range(2*amax+1)])
-# fact2s = ao.arr([pm.fact_exact(n,dn=2) for n in range(2*amax+1)])
-# dfact2n1s = ao.arr([pm.fact_exact(2*n-1,dn=2) for n in range(2*amax+1)]) # (2n-1)!!, double factorial of 2n-1
-ghalfs = ao.arr([pm.gamma_half_int(n) for n in range(2*amax+1)]) # more exact than exp(lgamma)
-binoms = ao.arr(
-    [
-        [pm.binom_exact(n, k) for k in range(2 * amax + 1)]
-        for n in range(2 * amax + 1)
-    ]
-)
-binom2s = ao.arr(
-    [
-        [pm.binom2k_exact(n, k) for k in range(1 * amax + 1)]
-        for n in range(2 * amax + 1)
-    ]
-)
-binom2ns = ao.arr(
-    [
-        [pm.binom2n_exact(n, k) for k in range(1 * amax + 1)]
-        for n in range(1 * amax + 1)
-    ]
-)
-
-def binom22(i,r,u):
-    """ i! / (r! u! (i-2(r+u))!) """
-    # this one is a function using the form factored into 
-    # binomials so we're not storing a 3d array, which would 
-    # be 141kB in float64 with amax=20 (i=[0,2*mx+1], r,u=[0,mx+1])
-    t = r + u
-    return binoms[i,2*t] * binom2ns[t,r]
+import pyquante22.array_ops as arr
 
 
-def fboys0(m2, x):
-    """series expansion around x=0"""
-    # expansion around x=0: (1 / (2*m + 1)) - (x / (2*m + 3)) + (x**2 / 6*(2*m + 5))
-    # (0.5 / m2) - (0.5*x / (m2+1)) + (0.5*x*x / (m2+2))/6
-    return 0.5 / m2 - 0.5 * x / (m2 + one)
+class CachedOps():
+    """pre-computed arrays of values"""
 
-def fboys(m, x):  # stable @ x=0
-    """boys function"""
-    m2 = m + 0.5 * one
-    ret = 0.5 * pow(x, -m2) * ao.gamma_inc(m2, x)
-    mask = x < ao.xp.finfo(x.dtype).eps
-    mask = ao.broadcast_to(mask, ret.shape)
-    # ret[:] = ao.where(mask, 0.5/m2, ret) # @TODO: optimize for broadcasting with m and x being different sizes
-    ret[mask] = ao.broadcast_to(0.5 / m2, ret.shape)[mask]
-    return ret
+    def __init__(self, ao=None, amax=10):
+        self.ao = ao or arr.get_default_ops()
+        self.amax = amax
+        self.ArrType = self.ao.ArrayType
+        self._create_constants()
+        self._create_combinatorials()
 
 
-def triple_conv_dot(
-    ax: ArrType, ay: ArrType, az: ArrType, fxyz: ArrType, preflip: bool = False
-) -> ArrType:
-    """ans[:] = sum_{i,j,k} ax[:,i] ay[:,j] az[:,k] fxyz[:,i+j+k]
-    preflip indicates whether az has been flipped along axis=1
-    """
-    B, nx = ax.shape
-    nz, nf = az.shape[1], fxyz.shape[1]
+    def _create_constants(self):
+        ao, amax = self.ao, self.amax
+        one = ao.arr(1)
+        self.izero = ao.arr(0, dtype=ao.int_dtype)
+        self.ione = ao.arr(1, dtype=ao.int_dtype)
+        self.zero = ao.arr(0)
+        self.half = ao.arr(0.5)
+        self.one = one
+        self.two = ao.arr(2)
+        self.pi = ao.arr(4) * ao.atan(one)
+        self.sqpi = ao.sqrt(self.pi)
+        self.eri_fac = (2 * one) * pow(self.pi, 2.5 * one)
+        self.parity = ao.arr([1, -1])  # (-1)^t = _parity[t%2]
+        self.arange_max = ao.arange(6 * amax + 1)  # 2 for pairs, 3 for 3d space
 
-    # ---- k = ay * az (true convolution) ----
-    # input: (1, B, ny), weight: (B, 1, nz), groups=B
-    w1 = (az if preflip else az.flip(-1)).unsqueeze(1)  # (B,1,nz)
-    x1 = ay.unsqueeze(0)  # (1,B,ny)
-    k = ao.conv1d(x1, w1, groups=B, padding=nz - 1).squeeze(0)  # (B, ny+nz-1)
-    # w1 = az if preflip else az.flip(-1)
-    # k  = ao.conv_full_batch(ay, w1) # (B,ny+nz-1)
-    nk = k.size(1)
+    def _create_combinatorials(self):
+        ao, amax = self.ao, self.amax
+        self.ghalfs = ao.arr(  # Gamma(n+1/2)
+            [pm.gamma_half_int(n) for n in range(2*amax+1)]
+        ) 
+        self.binoms = ao.arr( # n!/(k!(n-k)!)
+            [
+                [pm.binom_exact(n, k) for k in range(2 * amax + 2)]
+                for n in range(2 * amax + 2)
+            ]
+        )
+        self.binom2s = ao.arr( # n!/(k!(n-2k)!)
+            [
+                [pm.binom2k_exact(n, k) for k in range(1 * amax + 2)]
+                for n in range(4 * amax + 1)
+            ]
+        )
+        self.binom2ns = ao.arr( # (2n)!/(k!(n-k)!)
+            [
+                [pm.binom2n_exact(n, k) for k in range(1 * amax + 2)]
+                for n in range(2 * amax + 2)
+            ]
+        )
 
-    # ---- correlate f with k but compute only first nx outputs ----
-    need_len = nx + nk - 1  # f coverage needed for first nx outputs
-    take = min(nf, need_len)
-    right_pad = need_len - take  # only pad on the right if short
+    def binom22(self, i, r, u):
+        """ i! / (r! u! (i-2(r+u))!) """
+        # this one is a function using the form factored into 
+        # binomials so we're not storing a 3d array, which would 
+        # be 141kB in float64 with amax=20 (i=[0,2*mx+1], r,u=[0,mx+1])
+        t = r + u
+        return self.binoms[i,2*t] * self.binom2ns[t,r]
+#end class CachedOps():
 
-    x2 = fxyz[:, :take].unsqueeze(0)  # (1,B,take)
-    if right_pad:
-        x2 = ao.pad(x2, (0, right_pad))  # asymmetric pad (left=0, right)
-    w2 = k.unsqueeze(1)  # (B,1,nk)
-    c = ao.conv1d(x2, w2, groups=B).squeeze(0)  # (B, nx) exactly
 
-    # c  = ao.conv_full_batch(fxyz[:,:take], k)
+class GtoMath():
 
-    # ---- final reduction (single-kernel dot) ----
-    # return th.linalg.vecdot(ax, c, dim=1)   # (B,)
-    return ao.einsum('ij,ij->i', ax, c)
-# end def triple_conv_dot()
+    def __init__(self, ao=None):
+        self.ao = ao or arr.get_default_ops()
+        self.ArrType = self.ao.ArrayType
+
+
+    def pow_ladder(self, x_G, L: int):
+        """Build xpow where xpow[g,k] = x_G[g]^k for k=0..L-1.
+        return: xpow: (G,L)
+        """
+        ao = self.ao
+        assert L >= 1, "L must be >= 1"
+        ones = ao.ones((x_G.shape[0], 1), dtype=x_G.dtype)  # (G,1)
+        if L == 1:
+            return ones
+
+        xrep = ao.broadcast_to(x_G[:, None], (x_G.shape[0], L - 1))  # (G,L-1)
+        tail = ao.cumprod(xrep, axis=1)                              # (G,L-1) = x^1..x^(L-1)
+        return ao.concat([ones, tail], axis=1)                       # (G,L)
+
+
+    def fboys(self, m, x,):  # stable @ x=0
+        """boyf.ArrType, ay: ArrType, az: ArrType, fxyz: ArrType, preflip: bool = False
+    # ) -> ArrTypes function"""
+        ao = self.ao
+        m2 = m + 0.5 * ao.arr(1)
+        ret = 0.5 * pow(x, -m2) * ao.gamma_inc(m2, x)
+        mask = x < ao.xp.finfo(x.dtype).eps
+        mask = ao.broadcast_to(mask, ret.shape)
+        # ret[:] = ao.where(mask, 0.5/m2, ret) # @TODO: optimize for broadcasting with m and x being different sizes
+        ret[mask] = ao.broadcast_to(0.5 / m2, ret.shape)[mask]
+        return ret
+
+
+    def triple_conv_dot(self, ax, ay, az, fxyz, preflip=False):
+        """ans[:] = sum_{i,j,k} ax[:,i] ay[:,j] az[:,k] fxyz[:,i+j+k]
+        preflip indicates whether az has been flipped along axis=1
+        """
+        #     ax: self.ArrType, ay: ArrType, az: ArrType, fxyz: ArrType, preflip: bool = False
+        # ) -> ArrType:
+        B, nx = ax.shape
+        nz, nf = az.shape[1], fxyz.shape[1]
+
+        # ---- k = ay * az (true convolution) ----
+        # input: (1, B, ny), weight: (B, 1, nz), groups=B
+        w1 = (az if preflip else az.flip(-1)).unsqueeze(1)  # (B,1,nz)
+        x1 = ay.unsqueeze(0)  # (1,B,ny)
+        k = self.ao.conv1d(x1, w1, groups=B, padding=nz - 1).squeeze(0)  # (B, ny+nz-1)
+        # w1 = az if preflip else az.flip(-1)
+        # k  = ao.conv_full_batch(ay, w1) # (B,ny+nz-1)
+        nk = k.size(1)
+
+        # ---- correlate f with k but compute only first nx outputs ----
+        need_len = nx + nk - 1  # f coverage needed for first nx outputs
+        take = min(nf, need_len)
+        right_pad = need_len - take  # only pad on the right if short
+
+        x2 = fxyz[:, :take].unsqueeze(0)  # (1,B,take)
+        if right_pad:
+            x2 = self.ao.pad(x2, (0, right_pad))  # asymmetric pad (left=0, right)
+        w2 = k.unsqueeze(1)  # (B,1,nk)
+        c = self.ao.conv1d(x2, w2, groups=B).squeeze(0)  # (B, nx) exactly
+
+        # c  = ao.conv_full_batch(fxyz[:,:take], k)
+
+        # ---- final reduction (single-kernel dot) ----
+        # return th.linalg.vecdot(ax, c, dim=1)   # (B,)
+        return self.ao.einsum('ij,ij->i', ax, c)
+    # end def triple_conv_dot()
+#end class GtoMath():
 
 
 class CartGtoPrim:
-    """Cartesian GTO Primitive"""
+    """Cartesian GTO Primitive (batched)
+    """
 
-    def __init__(self, amom: ArrType, cen: ArrType, alpha: ArrType, nd: int = 3):
+    def __init__(self, amom, cen, alpha, coeffs=None,
+                 nd=3, ao=None, co=None, gm=None, precompute=True):
+        """
+        :param amom: (B,nd) int, angular momentum
+        :param cen: (B,nd) float, center
+        :param alpha: (B,) float, Gaussian exponent
+        :param nd: int, spatial dim count (must be 3)
+        :param ao: ArrayOps instance
+        :param co: CachedOps instance
+        :param precompute: bool, whether to calc norm
+        """
         if nd != 3:
             raise NotImplementedError("Only 3d GTOs currently implemented")
-        self.nd = nd  # spatial dimension
-        self.amom = amom  # int (batch*nd,)
-        self.cen = cen  # float (batch*nd,)
-        self.alpha = alpha  # float (batch*nd,) currently just repeated
-        self.lmax = self.amom.max()
-        self.norm = self.calc_norm()
+        self.ao = ao or arr.get_default_ops()
+        self.nd = nd
+
+        # support getitem with 1 item still batch
+        amom = self._cast_batch(amom, nd=self.nd, name="amom") 
+        cen  = self._cast_batch(cen,  nd=self.nd, name="cen")
+        B = amom.shape[0]
+        if cen.shape[0] != B:
+            raise ValueError("amom and cen must have the same batch size")
+
+        # alpha: require (B,) but allow (B,1) or legacy (B*nd,)
+        if getattr(alpha, "ndim", 0) == 0: # scalar
+            alpha = self.ao.arr([alpha])
+        if getattr(alpha, "ndim", None) == 2 and alpha.shape[1] == 1: # (B,1)
+            alpha = alpha.reshape(-1)
+        if getattr(alpha, "ndim", None) == 1 and len(alpha) == B * nd: # support legacy
+            alpha = alpha.reshape(B, nd)[:, 0]
+
+        self.amom = amom
+        self.cen = cen
+        self.alpha = alpha
+        self.lmax = self.amom.max().item()
+        self.co = co or CachedOps(self.ao, amax=max(self.lmax+2, 10))
+        self.gm = gm or GtoMath(self.ao)
+        self.coeffs = coeffs
+        self.norm = self.calc_norm() if precompute else None
+        if precompute and self.coeffs is not None:
+            self.coeffs = self.coeffs * self.norm
+
+
+    @staticmethod
+    def _cast_batch(x, nd: int, name: str):
+        if getattr(x, "ndim", None) == 1:  # allow legacy flattened (B*nd,) input
+            if len(x) % nd != 0:
+                raise ValueError(f"{name} length must be a multiple of nd")
+            return x.reshape(-1, nd)
+
+        if getattr(x, "ndim", None) != 2 or x.shape[1] != nd:
+            raise ValueError(f"{name} must be shape (B,{nd}) or (B*{nd},)")
+
+        return x
+
+    # def __getitem__(self, idx): # returns the same type
+    #     return CartGtoPrim(self.amom[idx], self.cen[idx], self.alpha[idx])
+    def __getitem__(self, idx): # returns the same type
+        coeffs = None if self.coeffs is None else self.coeffs[idx]
+        ret = CartGtoPrim(self.amom[idx], self.cen[idx],self.alpha[idx],
+            coeffs=coeffs, nd=self.nd, ao=self.ao, co=self.co, 
+            precompute=False,)
+        if self.norm is not None: ret.norm = self.norm[idx]
+        return ret
 
     def __len__(self):
-        return len(self.amom)
+        return int(self.amom.shape[0])
 
     def __mul__(self, other):
-        # syntactic sugar, |ab) = a*b
         return CartGtoPrimPair(self, other)
 
     def __add__(self, other):
-        """create a larger batch (not memory efficient)"""
-        return CartGtoPrim(
-            ao.concat([self.amom, other.amom]),
-            ao.concat([self.cen, other.cen]),
-            ao.concat([self.alpha, other.alpha]),
+        if self.nd != other.nd:
+            raise ValueError("nd mismatch")
+        ret = CartGtoPrim( 
+            self.ao.concat([self.amom, other.amom], axis=0),
+            self.ao.concat([self.cen, other.cen], axis=0),
+            self.ao.concat([self.alpha, other.alpha], axis=0),
+            nd=self.nd,
+            ao=self.ao,
+            co=self.co,
+            precompute=False,
         )
+        ret.norm = ret.calc_norm()
+        return ret
 
-    def __radd__(self, other):  # handle sum([list_of_gtos])
+    def __radd__(self, other):
         if isinstance(other, int) and other == 0:
             return self
         return self.__add__(other)
 
     def __repr__(self):
         ret = f"{type(self).__name__} (Lx,Ly,Lz) (Rx,Ry,Rz) Exp"
-        for ii in range(len(self) // self.nd):
-            i0, i1 = ii * self.nd, (ii + 1) * self.nd
-            ll = " ".join(f"{v.item():2d}" for v in self.amom[i0:i1])
-            xx = " ".join(f"{v.item():12.4f}" for v in self.cen[i0:i1])
-            ee = f"{self.alpha[i0].item():12.4e}"
+        for i in range(len(self)):
+            ll = " ".join(f"{int(v):2d}" 
+                          for v in self.ao.tolist(self.amom[i]))
+            xx = " ".join(f"{float(v):12.4f}" 
+                          for v in self.ao.tolist(self.cen[i]))
+            ee = f"{float(self.alpha[i]):12.4e}"
             ret += f"\n{ll}  {xx}  {ee}"
         return ret
 
     def hash(self, digits=8):
-        return sha256(repr(self).encode('utf-8')).hexdigest()[:digits]
+        return sha256(repr(self).encode("utf-8")).hexdigest()[:digits]
 
     def __str__(self):
-        if len(self) <= self.nd:
-            ams = ",".join([f"{v}" for v in self.amom.tolist()])
-            rxs = ",".join([f"{v:.2f}" for v in self.cen.tolist()])
-            aas = ",".join([f"{v:.2e}" for v in self.alpha[:: self.nd].tolist()])
+        ao = self.ao
+        if len(self) == 1:
+            ams = ",".join([f"{int(v)}" for v in ao.tolist(self.amom[0])])
+            rxs = ",".join([f"{float(v):.2f}" for v in ao.tolist(self.cen[0])])
+            aas = f"{float(self.alpha[0]):.2e}"
         else:
 
             def summarize_pairs(keys, counts, fmt="{k}x{c}", limit=4):
-                s = ",".join(
-                    fmt.format(k=k, c=c)
-                    for k, c in zip(keys[:limit], counts[:limit])
-                )
+                s = ",".join(fmt.format(k=k, c=c) 
+                    for k, c in zip(keys[:limit], counts[:limit]))
                 return s + ("..." if len(keys) > limit else "")
 
-            # amom summary
-            aas, acs = ao.unique(
-                self.amom.reshape(-1, self.nd).sum(axis=1), return_counts=True
-            )
-            ams = summarize_pairs(ao.tolist(aas), ao.tolist(acs))
-            # cen summary
-            rus, rcs = ao.unique(
-                self.cen.reshape(-1, self.nd), axis=0, return_counts=True
-            )
-            rxs = summarize_pairs(['A', 'B', 'C', 'D'], ao.tolist(rcs))
+            # amom summary (by total angular momentum Lx+Ly+Lz)
+            Ls, Lc = ao.unique(self.amom.sum(axis=1), return_counts=True)
+            ams = summarize_pairs(ao.tolist(Ls), ao.tolist(Lc))
+
+            # center summary
+            rus, rcs = ao.unique(self.cen, axis=0, return_counts=True)
             if len(rus) == 1:
-                rxs = ",".join(f"{v:.2f}" for v in ao.tolist(rus[0]))
+                rxs = ",".join(f"{float(v):.2f}" for v in ao.tolist(rus[0]))
+            else:
+                rxs = summarize_pairs(["R"] * len(rcs), ao.tolist(rcs), fmt="{k}{c}")
+
             # alpha summary
-            aas = ao.unique(self.alpha[:: self.nd])
-            aas = (
-                ao.tolist(aas)[0]
-                if len(aas) == 1
-                else f"{ao.amin(self.alpha)}...{ao.amax(self.alpha)}"
-            )
-        return f"GTO[{len(self)//self.nd}]_{{{ams}}}@({rxs};{aas})[{self.hash()}]"
-    # end def __str__(self):
+            aas_u = ao.unique(self.alpha)
+            if len(aas_u) == 1:
+                aas = f"{float(ao.tolist(aas_u)[0]):.2e}"
+            else:
+                aas = f"{float(ao.amin(self.alpha)):.2e}...{float(ao.amax(self.alpha)):.2e}"
 
-    def __getitem__(self, idx):  # lra ordering
-        id0 = idx * self.nd
-        id1 = id0 + self.nd
-        ids = slice(id0, id1)
-        ret = self.amom[ids], self.cen[ids], self.alpha[ids]
-        return ret
+        return f"GTO[{len(self)}]_{{{ams}}}@<{rxs}>;{aas}[{self.hash()}]"
+    #end def __str__(self):
 
-    def calc_binoms(self, pab: ArrType, offset=None) -> ArrType:
-        """compute the binomial expansion coefficients given a center
-        offset: (3,) will change the amom for the calculation
-        """
-        if offset is not None:
-            bsz = len(self) // len(offset)  # error check?
-            amom = self.amom + ao.tile(offset, bsz)
-            lmax = amom.max()
-        else:
-            amom = self.amom
-            lmax = self.lmax
-        irng = arange_max[: lmax + 1]
-        pows = amom[:, None] - irng[None, :]
-        pows[pows < 0] = zero  # @TODO optimize with relu
-        ret = (
-            ao.pow((pab - self.cen)[:, None], pows)
-            * binoms[amom[:, None], irng[None, :]]
-        )
-        mask = (amom < 0)[:, None]  # zero out negative amom (for kinetic)
-        ret[ao.broadcast_to(mask, ret.shape)] = zero
-        return ret
-    # end def calc_binoms()
 
     def calc_norm(self):
-        """Normalize basis function. From THO eq. 2.2"""
-        norm2_1d = ao.pow(2*self.alpha, self.amom + half)
-        norm2_1d /= ghalfs[self.amom] #* sqpi
-        # norm2_1d *= ao.pow(2, self.amom) / (dfact2n1s[self.amom] * sqpi)
-        norm2 = ao.prod(norm2_1d.reshape(-1, self.nd), axis=1)
+        """Normalize basis function. From THO eq. 2.2, with alpha shared across xyz."""
+        ao = self.ao
+        norm2_1d = ao.pow(2 * self.alpha[:, None], 
+                          self.amom + self.co.half)
+        norm2_1d /= self.co.ghalfs[self.amom]
+        norm2 = ao.prod(norm2_1d, axis=1)  # (B,)
         return ao.sqrt(norm2)
 
-# end class CartGtoPrim():
+
+    def calc_binoms(self, pab, offset=None):
+        """Compute binomial expansion coeffs given a center
+        param: pab: (B,nd) or (B,C,nd)
+        param: offset: (nd,) optional; change to amom (for kinetic)
+        returns: (B,nd,Lmax+1) or (B,C,nd,Lmax+1)
+        """
+        keepC = (pab.ndim == 3)
+        pab  = pab if keepC else pab[:, None, :]     # (B,C,nd)
+
+        if offset is not None:
+            amom = (self.amom + offset[None,:])[:,None,:] # (B,1,nd)
+            lmax = max(0, amom.max().item())
+        else:
+            amom = self.amom[:,None,:] # (B,1,nd)
+            lmax = self.lmax
+
+        irng = self.co.arange_max[:lmax + 1]  # (L,)
+        pows = amom[..., None] - irng[None, None, None, :]  # (B,C,nd,L)
+
+        pows[pows < 0] = self.co.izero  # 
+        ret = self.co.binoms[amom[..., None], irng[None, None, None, :]]  * \
+            self.ao.pow((pab - self.cen[:, None, :])[..., None], pows) # (B,C,nd,L)
+        mask = (amom < 0)[..., None]  # (B,1,nd,1)
+        ret = self.ao.where(mask, self.co.zero, ret)
+        return ret if keepC else ret[:,0,:,:]
+    #end def calc_binoms(self, pab: ArrType, offset=None) -> ArrType:
+
+#end class CartGtoPrim:
 
 
-CGP = CartGtoPrim
+CGP = CartGtoPrim # shorthand
 
 
 class CartGtoPrimPair:
-    """Pairs of CartGtoPrim for batch'd eval of integrals"""
+    """Pairs of CartGtoPrim for batch'd eval of integrals
+    """
 
-    def __init__(self, ga: CGP, gb: CGP):
-        if len(ga) != len(gb):
-            raise ValueError(
-                "::ERR::(CartGtoPrimPair) pairs must be same batch size"
-            )
+    def __init__(self, ga: CGP, gb: CGP, precompute=True):
         if ga.nd != gb.nd:
-            raise ValueError(
-                "::ERR::(CartGtoPrimPair) pairs must be same spatial dim"
-            )
+            raise ValueError("::ERR::(CartGtoPrimPair) pairs must be same spatial dim")
         self.nd = ga.nd
         self.ga = ga
         self.gb = gb
-        self.gamma = ga.alpha + gb.alpha  #
-        self.pab = self.calc_product_centers()  # combined center, P_{AB}
-        self.binom_pres = self.calc_prod_binoms()  # binomial prefactors
-        self.hab = self.calc_h_array()
+        self.ao = ga.ao
+        self.co = ga.co # assume no amax issues
+
+        if precompute:
+            self.gamma = ga.alpha[:, None] + gb.alpha[None, :]  # (Na,Nb) exponent sums
+            self.pab = self.calc_product_centers()              # (Na,Nb,3) product centers P_AB
+            self.binom_pres = self.calc_prod_binoms()           # (Na,Nb,3,Lp)
+            self.hab = self.calc_h_array()                      # (Na,Nb,3,Lh)
 
     def __len__(self):
-        return len(self.ga)
+        return int(len(self.ga) * len(self.gb))
+
+    @property
+    def shape(self):
+        return len(self.ga), len(self.gb)
+
+    def __getitem__(self, idx):
+        return CartGtoPrimPair(self.ga[idx[0]], self.gb[idx[1]])
 
     def __repr__(self):
         rga = "A: " + repr(self.ga)
@@ -268,46 +361,65 @@ class CartGtoPrimPair:
         return f"{rga}\n{rgb}"
 
     def __str__(self):
-        pre = f"GTO[{len(self)//self.ga.nd}]_"
-        sga = str(self.ga).replace(pre, "")
-        sgb = str(self.gb).replace(pre, "")
-        return f"PairGTO[{len(self)}]{sga}//{sgb}"
+        return f"PairGTO[{len(self.ga)}x{len(self.gb)}]{str(self.ga)}//{str(self.gb)}"
 
     def __or__(self, other):
         # syntactic sugar, ERI: (a*b|c*d), NAI: (a*b|R)
-        if isinstance(other, ArrType):
-            return self.calc_nai(other)
+        if hasattr(other, "shape"):
+            return self.calc_nai(other)  # implemented later
         if isinstance(other, type(self)):
-            return self.calc_eri(other)
+            return self.calc_eri(other)  # implemented later
         raise NotImplementedError(f"No integral implemented for {type(other)}")
 
+
     def hash(self, digits=8):
-        return sha256(repr(self).encode('utf-8')).hexdigest()[:digits]
+        return sha256(repr(self).encode("utf-8")).hexdigest()[:digits]
 
-    def calc_product_centers(self) -> ArrType:
+
+    def calc_product_centers(self):
+        """GTO product centers"""
         ga, gb = self.ga, self.gb
-        # return (ga.alpha*ga.cen + gb.alpha*gb.cen) / self.gamma
-        aa = ga.alpha / self.gamma  # scale for numerical stability
-        bb = gb.alpha / self.gamma
-        return aa * ga.cen + bb * gb.cen
+        # numerically stable form: P = (aa/g)*A + (bb/g)*B
+        aa = ga.alpha[:, None] / self.gamma   # (Na,Nb)
+        bb = gb.alpha[None, :] / self.gamma   # (Na,Nb)
+        ra = ga.cen[:, None, :]               # (Na,1,3)
+        rb = gb.cen[None, :, :]               # (1,Nb,3)
+        return (aa[..., None] * ra) + (bb[..., None] * rb)  # (Na,Nb,3)
 
-    def calc_prod_binoms(self) -> ArrType:
-        """calculate binomial coefficents for the product of GTOs"""
-        # treat xyz as batch
-        self.abinoms = self.ga.calc_binoms(self.pab)
-        self.bbinoms = self.gb.calc_binoms(self.pab)
-        return ao.conv_full_batch(self.abinoms, self.bbinoms)
 
+    def calc_prod_binoms(self):
+        """GTO product binomial prefactors, returns: (Na, Nb, nd, Lp)"""
+        ao = self.ao
+        ga, gb, nd = self.ga, self.gb, self.nd
+        Na, Nb, P = len(ga), len(gb), self.pab              # P:(Na,Nb,nd)
+        self.abinoms = ga.calc_binoms(P)                    # (Na,Nb,nd,La)
+        btmp = gb.calc_binoms(ao.transpose(P,(1, 0, 2)))    # (Nb,Na,nd,Lb)
+        self.bbinoms = ao.transpose(btmp,(1, 0, 2, 3))      # (Na,Nb,nd,Lb)
+        G = Na * Nb * nd
+        pres = ao.conv_full_batch(self.abinoms.reshape(G, -1), self.bbinoms.reshape(G, -1))
+        return pres.reshape(Na, Nb, nd, -1)
+
+    
     def calc_overlap1d(self, offset=None):
+        ao, co = self.ao, self.co
         if offset is not None:
             # @TODO optimization: only calculate the evens instead of slicing
-            bbinoms = self.gb.calc_binoms(self.pab, offset=offset)
-            bps = ao.conv_full_batch(self.abinoms, bbinoms)[:, ::2]
+            Na, Nb, P = len(self.ga), len(self.gb), self.pab              # P:(Na,Nb,nd)
+            G = Na * Nb * self.nd
+            otmp = self.gb.calc_binoms(ao.transpose(self.pab,(1, 0, 2)),
+                offset=offset)    # (Nb,Na,nd,Lb)
+            obinoms = ao.transpose(otmp,(1, 0, 2, 3))      # (Na,Nb,nd,Lb)
+            ret = ao.conv_full_batch(self.abinoms.reshape(G, -1), 
+                                     obinoms.reshape(G, -1))
+            ret = ret.reshape(Na, Nb, self.nd, -1)[..., ::2]
         else:
-            bps = self.binom_pres[:, ::2]  # only take even factors
-        irng = arange_max[: bps.shape[1]][None, :]
-        totals = bps * ghalfs[irng] * ao.pow(self.gamma[:, None], -irng)
-        return ao.sum(totals, axis=1)
+            #@TODO: implement copy for ArrayOps (+0 is a hack)
+            ret = self.binom_pres[..., ::2] + co.zero # only take even factors, force copy with +0
+        irng = co.arange_max[: ret.shape[-1]][None,None,:]
+        pows = ao.pow(self.gamma[:,:,None], irng)
+        ret *= (co.ghalfs[irng] / pows)[:,:,None,:] # add spatial dim
+        return ao.sum(ret, axis=3)
+
 
     def calc_overlap(self, offset=None):
         """calculate the overlap of the pair
@@ -315,167 +427,109 @@ class CartGtoPrimPair:
         offset: optional ang. mom. offset, must be (nd,)
         return: overlaps of (len(self)//nd,)
         """
-        if len(self) % self.nd != 0:
-            raise ValueError(
-                "::ERR::(calc_overlap) batch size must be a multiple of 3"
-            )
-        bsz = (len(self) // self.nd, self.nd)  # batch size (shape tuple)
-        ga, gb = self.ga, self.gb
-        # ret = ao.sqrt(pi / self.gamma) * ao.exp(
-        ret = ao.sqrt(one / self.gamma) * ao.exp(
-            -ga.alpha * gb.alpha * ao.square(ga.cen - gb.cen) / self.gamma
-        )
-        ret = ret.reshape(bsz)  # ss overlap term, split into spatial dims
-        ret *= self.calc_overlap1d(offset=offset).reshape(bsz)  # 1D overlaps
-        return ao.prod(ret, axis=1)
-
+        ao, ga, gb = self.ao, self.ga, self.gb
+        invgam = self.co.one / self.gamma # (Na,Nb)
+        ret = ao.exp(ao.square(ga.cen[:,None,:] - gb.cen[None,:,:]) * 
+            (-ga.alpha[:,None]*gb.alpha[None,:]*invgam)[:,:,None])
+        ret *= ao.sqrt(invgam)[:,:,None]
+        ret *= self.calc_overlap1d(offset=offset)  # 1D overlaps
+        return ao.prod(ret, axis=2)
     # end def calc_overlap(self, nd=3, offset=None):
+
 
     def calc_kinetic(self):
         """calculate the kinetic operator expectation for the pair (THO Eq. 2.14)
         logic is hardcoded for nd=3
         return: values of (len(self)//nd,)
         """
-        # @TODO optimization:
-        # the 'offset' feature in calc_overlap() is minimal extra alloc's,
-        # but we're still recalculating the same values for the dimensions
-        # that aren't being changed. We could either store the intermediates
-        # of calc_overlap1d, or pass an offset list and calc the whole offset
-        # list. Would need to return as a list or extra dimension, or we could
-        # pass an additional set of weights for collapsing the sum...
-        nd = self.nd
-        ga, gb = self.ga, self.gb
-        bsz = (len(self) // nd, nd)
-        amb = gb.amom.reshape(bsz)
-        ab = gb.alpha[::nd]
-        offsets = 2 * ao.eye(nd, dtype=ga.amom.dtype)
+        ao, ga, gb = self.ao, self.ga, self.gb
+        ab, amb = gb.alpha, gb.amom
+        offsets = 2 * ao.eye(self.nd, dtype=ga.amom.dtype)
 
-        term0 = ab * (2 * ao.sum(amb, axis=1) + 3) * self.calc_overlap()
+        two, three = 2*self.co.one, 3*self.co.one
+        fac0 = ab * (two * ao.sum(amb,axis=1) + three)
+        term0 = self.calc_overlap()
+        term0 *= fac0[None,:]
 
         term1 = self.calc_overlap(offset=offsets[0])
         term1 += self.calc_overlap(offset=offsets[1])
         term1 += self.calc_overlap(offset=offsets[2])
-        term1 *= -2 * ao.square(ab)
+        term1 *= (-two * ao.square(ab))[None,:]
 
-        l2 = gb.amom[0::nd]
-        term2 = l2 * (l2 - 1) * self.calc_overlap(offset=-offsets[0])
-        l2 = gb.amom[1::nd]
-        term2 += l2 * (l2 - 1) * self.calc_overlap(offset=-offsets[1])
-        l2 = gb.amom[2::nd]
-        term2 += l2 * (l2 - 1) * self.calc_overlap(offset=-offsets[2])
-        term2 *= -half
+        if gb.lmax > 1: # 
+            l2 = gb.amom[:, 0][None,:] # (1,Nb)
+            term2 = (l2 * (l2 - 1)) * self.calc_overlap(offset=-offsets[0])
+            l2 = gb.amom[:, 1][None,:]
+            term2 += (l2 * (l2 - 1)) * self.calc_overlap(offset=-offsets[1])
+            l2 = gb.amom[:, 2][None,:]
+            term2 += (l2 * (l2 - 1)) * self.calc_overlap(offset=-offsets[2])
+            term2 *= -self.co.half
 
-        return term0 + term1 + term2
+            return term0 + term1 + term2
+
+        else:
+            return term0 + term1
     # end def calc_kinetic(gpair, nd=3):
 
 
-    def calc_a_array(self, rcen:ArrType) -> ArrType:
-        """ THO eq. 2.18 and 3.1 
-        flipi : flip the I index of the returned tensor (for efficient convolution)
-        """
-        dPn = self.pab - rcen
-        abmom = self.ga.amom + self.gb.amom
-        llmax = abmom.max().item()
-        full_sz = (len(self), llmax + 1, llmax // 2 + 1, llmax // 2 + 1)
-        # local shapes are [B, imx, rmx, umx], (batch, i, r, u)
-        irng = arange_max[: full_sz[1]][None,:,None,None]
-        rrng = arange_max[: full_sz[2]][None,None,:,None]
-        urng = arange_max[: full_sz[3]][None,None,None,:]
-        nrurng = -(rrng + urng)
 
-        bipres = self.calc_prod_binoms()[:,:,None,None]
-        gpows = ao.pow(4*self.gamma[:,None,None,None], nrurng)
-        cpows = ao.pow(dPn[:,None,None,None], irng + 2*nrurng)
+    def calc_h_array(self):
+        """THO Eqn 3.5 (typo fixed)"""
+        ao = self.ao
+        bps = self.binom_pres[...,None] # (Na,Nb,nd,lmax)
+        lmax = bps.shape[3] - 1
+        full_sz = (len(self.ga), len(self.gb), self.ga.nd, lmax + 1, lmax // 2 + 1)
+        g4s = ao.broadcast_to((4*self.gamma)[:,:,None,None,None], full_sz)
 
-        iuparity = _parity[(irng+urng)%2]
-        terms = iuparity * bipres * cpows * gpows * \
-            binom22(irng,rrng,urng)
-
-        # now I need to mask and then do the weird sum
-        imask = (rrng <= ao.floor(irng/2)) & \
-            (urng <= ao.floor((irng-2*rrng)/2))
-
-        sum_idx = irng - 2*rrng - urng
-        sum_idx[~imask] = full_sz[1] # dummy index @TODO check if always 0 and optimize this out
-        terms_flat = terms.reshape(full_sz[0], -1)
-        sum_idx_batch = ao.broadcast_to(sum_idx.reshape(-1), (full_sz[0], -1))
-        ret = ao.zeros((full_sz[0], full_sz[1]+1))
-        ret.scatter_add_(dim=1, index=sum_idx_batch, src=terms_flat)
-
-        ret = ret[:, :-1] # get rid of the dummy sum (can have NaNs)
-        # bug?
-        # mask = (abmom < irng)[:,:,0,0] # invalids, squeeze
-        # ret[:] = ao.where(mask, ao.arr(0), ret)
-        # mask = abmom[:,None] < irng[:,:,0,0] # (B,1) < (1,L) => (B,L), same as ret
-        # ret[mask] = zero # in practice I found these are already 0
-        return ret
-
-
-    def calc_nai(self, rcen: ArrType) -> ArrType:
-        if len(self) != len(rcen):
-            raise ValueError("::ERR::(calc_nai) Batch size mismatch")
-
-        nd = self.nd
-        bsz = len(self) // nd
-        ra, rb = self.ga.cen.reshape(bsz, nd), self.gb.cen.reshape(bsz, nd)
-        a_array = self.calc_a_array(rcen).reshape(bsz, nd, -1).transpose(0, 1)
-
-        aa, ab, gab = self.ga.alpha[::nd], self.gb.alpha[::nd], self.gamma[::nd]
-        rab2 = ao.sum(ao.square(ra - rb), axis=1) # @TODO: reused in ERI, make a self attr
-        rnp2 = ao.sum(ao.square((rcen - self.pab).reshape(bsz, nd)), axis=1)
-
-        fbx = gab * rnp2
-        ijkmax = 3 * a_array.shape[-1]  # @TODO get actual max needed
-        boys = fboys(arange_max[: ijkmax + 1][None, :], fbx[:, None])
-        ret = triple_conv_dot(a_array[0], a_array[1], a_array[2], boys)
-        ret *= -2*pi/gab * ao.exp(-aa*ab*rab2/gab)
-        return ret
-    #end def calc_nai(self, rcen: ArrType) -> ArrType:
-
-
-    def calc_h_array(self) -> ArrType:
-        """v2 is fancier masking logic"""
-        # bsz = len(self)
-        llmax = (self.ga.amom + self.gb.amom).max().item()
-        full_sz = (len(self), llmax + 1, llmax // 2 + 1)
-
-        bps = self.calc_prod_binoms()[:, : full_sz[1], None]  # (3,llmax+1,1)
-        g4s = ao.broadcast_to((4 * (self.gamma)).reshape(-1, 1, 1), full_sz)
-
-        irng = arange_max[: full_sz[1]][:, None]
-        rrng = arange_max[: full_sz[2]][None, :]
+        irng = self.co.arange_max[: full_sz[3]][:, None]
+        rrng = self.co.arange_max[: full_sz[4]][None, :]
         irmask = rrng <= irng // 2
-        iflat = ao.broadcast_to(irng, full_sz[1:])[irmask]
-        rflat = ao.broadcast_to(rrng, full_sz[1:])[irmask]
+        iflat = ao.broadcast_to(irng, full_sz[3:])[irmask]
+        rflat = ao.broadcast_to(rrng, full_sz[3:])[irmask]
         iiflat = iflat - 2 * rflat
 
-        h_vals_flat = ao.broadcast_to(bps, full_sz)[
-            :, irmask
-        ]  # irng > amom == 0 from bps
-        h_vals_flat *= ao.pow(g4s[:, irmask], (rflat - iflat)[None, :])
-        h_vals_flat *= binom2s[iflat, rflat]
-        ret = ao.zeros(full_sz[:2])
+        h_vals_flat = ao.broadcast_to(bps, full_sz)[...,irmask]  # irng > amom == 0 from bps
+        h_vals_flat *= ao.pow(g4s[...,irmask], (rflat - iflat)[None,None,None,:])
+        h_vals_flat *= self.co.binom2s[iflat, rflat][None,None,None,:]
+
+        ret = ao.zeros(full_sz[:-1])
         sum_ids = ao.broadcast_to(iiflat.reshape(1, -1), h_vals_flat.shape)
-        ret.scatter_add_(dim=1, index=sum_ids, src=h_vals_flat)
+        # ret.scatter_add_(dim=-1, index=sum_ids, src=h_vals_flat)
+        ao.scatter_add_inplace(ret, -1, sum_ids, h_vals_flat)
         return ret
+    # end def calc_h_array(self):
 
-    # end def calc_h_array(self, other):
 
+    def calc_c_array(self, other):
+        """THO Eqn 3.4, batched over independent (a,b,c,d) indices.
+        returns: (Na,Nb,Nc,Nd,nd,L) where L = lmax+2
+        """
+        ao, co = self.ao, self.co
+        Na, Nb, Nc, Nd = len(self.ga), len(self.gb), len(other.ga), len(other.gb)
+        B = Na * Nb * Nc * Nd
 
-    def calc_c_array(self, other: "CartGtoPrimPair") -> ArrType:
-        # ga, gb, gc, gd = self.ga, self.gb, other.ga, other.gb
-        hab, hcd = self.hab, other.hab
-        qp = other.pab - self.pab
         if hasattr(self, "deltas"):
             deltas = self.deltas
         else:
-            deltas = 0.25 * (one / self.gamma + one / other.gamma)
-        abmax, cdmax = hab.shape[1] - 1, hcd.shape[1] - 1
+            gab, gcd = self.gamma, other.gamma  # (Na,Nb), (Nc,Nd)
+            deltas = 0.25 * (
+                (co.one / gab)[:, :, None, None] + (co.one / gcd)[None, None, :, :]
+            )  # (Na,Nb,Nc,Nd)
+
+        hab = self.hab.reshape(-1, *self.hab.shape[2:])      # (Na*Nb,nd,L)
+        hcd = other.hab.reshape(-1, *other.hab.shape[2:])    # (Nc*Nd,nd,M)
+        habcd = hab[:, None, :, :, None] * hcd[None, :, :, None, :]  # (Na*Nb,Nc*Nd,nd,L,M)
+        habcd = habcd.reshape(-1, hab.shape[-1], hcd.shape[-1])      # (B*nd,L,M)
+
+        qp = other.pab[None, None, :, :, :] - self.pab[:, :, None, None, :]  # (Na,Nb,Nc,Nd,nd)
+        qp = qp.reshape(-1)  # (B*nd,)
+
+        abmax, cdmax = habcd.shape[1] - 1, habcd.shape[2] - 1
         lmax = abmax + cdmax
 
-        abrng = arange_max[: abmax + 1][:, None, None]
-        cdrng = arange_max[: cdmax + 1][None, :, None]
-        urng = arange_max[: lmax // 2 + 1][None, None, :]
+        abrng = co.arange_max[: abmax + 1][:, None, None]
+        cdrng = co.arange_max[: cdmax + 1][None, :, None]
+        urng = co.arange_max[: lmax // 2 + 1][None, None, :]
         iirng = abrng + cdrng - urng  # (L,M,U)
         iurng = iirng - urng
         iumask = iurng >= 0
@@ -483,228 +537,240 @@ class CartGtoPrimPair:
         iiflat = iirng[iumask]
         iuflat = iurng[iumask]
         uflat = ao.broadcast_to(urng, (*iumask.shape[:2], urng.shape[-1]))[iumask]
-        facts = binom2s[iiflat + uflat, uflat]  #
-        # parity = _parity((cdrng+urng)%2).expand(iumask.shape[0],-1,-1)[iumask]
+        facts = co.binom2s[iiflat + uflat, uflat]
         parity = ao.broadcast_to(
-            _parity[(cdrng + urng) % 2],
+            co.parity[(cdrng + urng) % 2],
             (iumask.shape[0], cdrng.shape[1], urng.shape[2]),
         )[iumask]
 
         c_vals_flat = ao.pow(qp[:, None], iuflat[None, :])
         c_vals_flat *= ao.broadcast_to(
-            (hab[:, :, None] * hcd[:, None, :])[:, :, :, None],
-            (*hab.shape[:2], hcd.shape[1], iumask.shape[-1]),
+            habcd[:, :, :, None],
+            (*habcd.shape, iumask.shape[-1]),
         )[:, iumask]
         c_vals_flat *= (facts * parity)[None, :]
 
-        ret = ao.zeros((len(self), lmax + 2))
+        ret = ao.zeros((B * self.nd, lmax + 2))
         sum_ids = ao.broadcast_to(iiflat.reshape(1, -1), c_vals_flat.shape)
-        ret.scatter_add_(dim=1, index=sum_ids, src=c_vals_flat)
-        # ret.index_add_(1, iiflat, c_vals_flat)
-        tmp3 = ao.pow(deltas[:, None], -arange_max[: lmax + 2])
-        ret *= tmp3
-        return ret
-    # end def calc_c_array(self, other:"CartGtoPrimPair") -> ArrType:
+        ao.scatter_add_inplace(ret, 1, sum_ids, c_vals_flat)
 
-    def calc_eri(self, other) -> ArrType:
-        if len(self) != len(other):
-            raise ValueError("::ERR::(calc_eri) Batch size mismatch")
+        d2 = ao.broadcast_to(deltas[..., None], (Na, Nb, Nc, Nd, self.nd)).reshape(-1)
+        ret *= ao.pow(d2[:, None], -co.arange_max[: lmax + 2][None, :])
+        return ret.reshape(Na, Nb, Nc, Nd, self.nd, lmax + 2)
+    # end def calc_c_array(self, other):
 
+
+    def calc_eri(self, other):
+        """Electron repulsion integrals (a*b|c*d) in 4D batch form."""
+        ao, co = self.ao, self.co
+        Na, Nb, Nc, Nd = len(self.ga), len(self.gb), len(other.ga), len(other.gb)
         nd = self.nd
-        bsz = len(self) // nd
-        gab, gcd = self.gamma[:], other.gamma[:]
-        self.deltas = 0.25 * (one / gab + one / gcd)
-        c_array = (
-            self.calc_c_array(other).view(bsz, nd, -1).transpose(0, 1)
-        )  # .contiguous()
 
-        qp2 = ao.pow(self.pab - other.pab, 2 * one).reshape(-1, nd).sum(axis=1)
-        fbx = 0.25 * qp2 / self.deltas[::nd]
+        gab, gcd = self.gamma, other.gamma  # (Na,Nb), (Nc,Nd)
+        deltas = 0.25 * (
+            (co.one / gab)[:, :, None, None] + (co.one / gcd)[None, None, :, :]
+        )  # (Na,Nb,Nc,Nd)
+
+        # build C array and flatten spatial dim for triple_conv_dot
+        self.deltas = deltas
+        c_array = self.calc_c_array(other)  # (Na,Nb,Nc,Nd,nd,L)
+        del self.deltas
+
+        B = Na * Nb * Nc * Nd
+        c_flat = ao.transpose(c_array.reshape(B, nd, -1), (1, 0, 2))  # (nd,B,L)
+
+        qp2 = ao.sum(
+            ao.square(self.pab[:, :, None, None, :] - other.pab[None, None, :, :, :]),
+            axis=4,
+        )  # (Na,Nb,Nc,Nd)
+        fbx = 0.25 * qp2 / deltas  # (Na,Nb,Nc,Nd)
+
         ijkmax = 3 * c_array.shape[-1]  # @TODO get actual max needed
-        boys = fboys(arange_max[: ijkmax + 1][None, :], fbx[:, None])
-        ret = triple_conv_dot(c_array[0], c_array[1], c_array[2], boys)
-        del fbx, boys, self.deltas
+        boys = self.ga.gm.fboys(co.arange_max[: ijkmax + 1][None, :], fbx.reshape(B, 1))
 
-        aa, ab = self.ga.alpha[::nd], self.gb.alpha[::nd]
-        ac, ad = other.ga.alpha[::nd], other.gb.alpha[::nd]
-        ra, rb = self.ga.cen.view(bsz, nd), self.gb.cen.view(bsz, nd)
-        rc, rd = other.ga.cen.view(bsz, nd), other.gb.cen.view(bsz, nd)
-        rab2 = ao.sum(ao.square(ra - rb), dim=1) # @TODO: reused in NAI, make a self attr
-        rcd2 = ao.sum(ao.square(rc - rd), dim=1)
+        ret = self.ga.gm.triple_conv_dot(c_flat[0], c_flat[1], c_flat[2], boys)
+        ret = ret.reshape(Na, Nb, Nc, Nd)
 
-        gab, gcd = gab[::nd], gcd[::nd]
-        ret *= eri_fac / (gab * gcd * ao.sqrt(gab + gcd))
-        ret *= ao.exp(-aa * ab * rab2 / gab)
-        ret *= ao.exp(-ac * ad * rcd2 / gcd)
+        # prefactors
+        aa = self.ga.alpha[:, None]
+        ab = self.gb.alpha[None, :]
+        ac = other.ga.alpha[:, None]
+        ad = other.gb.alpha[None, :]
+
+        ra = self.ga.cen[:, None, :]
+        rb = self.gb.cen[None, :, :]
+        rc = other.ga.cen[:, None, :]
+        rd = other.gb.cen[None, :, :]
+        rab2 = ao.sum(ao.square(ra - rb), axis=2)  # (Na,Nb)
+        rcd2 = ao.sum(ao.square(rc - rd), axis=2)  # (Nc,Nd)
+
+        pref = co.eri_fac / (
+            gab[:, :, None, None]
+            * gcd[None, None, :, :]
+            * ao.sqrt(gab[:, :, None, None] + gcd[None, None, :, :])
+        )
+        ret *= pref
+        ret *= ao.exp(-aa * ab * rab2 / gab)[:, :, None, None]
+        ret *= ao.exp(-ac * ad * rcd2 / gcd)[None, None, :, :]
         return ret
-    # end def calc_eri(self, other) -> ArrType:
-
-# end class CartGtoPrimPair():
+    # end def calc_eri(self, other):
 
 
-debug_var = 1
+
 if __name__ == "__main__":
-    n = 2
-    ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
-    amx = ao.arr([-2, 0, 0], dtype=ao.int_dtype)
-    amp = ao.arr([1, 0, 0], dtype=ao.int_dtype)
-    amn = ao.arr([n, n+1, n+2], dtype=ao.int_dtype)
-    r0 = ao.arr([0, 0, 0])
-    rb = ao.arr([0.125, 0.25, 0.5])
-    aa = ao.arr([1.0] * 3)
-    gn = CartGtoPrim(amn, r0, aa)
-    gs = CartGtoPrim(ams, r0, aa)
-    gx = CartGtoPrim(amx, r0, aa)
-    gsb = CartGtoPrim(ams, rb, aa)
-    gp = CartGtoPrim(amp, r0, aa)
-    gnb = CartGtoPrim(amn, rb, aa)
-    mys1 = str(gx)
+    from pyquante22.basis.cart_gto_orig import CartGtoPrim as CGP0
+    from pyquante22.basis.cart_gto_orig import CartGtoPrimPair as CPP0
+    import itertools
+    import time
 
-    import numpy as np
-    alpha = 1.0 # power of an s-type orbital
-    gamma = 2*alpha # orbital squared doubles exponent
-    # gamma = 1/(2*sigma^2) # relation of gamma to sigma
-    sigma = 1.0 / np.sqrt(2*gamma)
-    n1d = np.pow(2*np.pi*sigma**2, -1/4) # sqrt again for half of the norm
-    n3d = n1d**3
+    def ndindex(shape):
+        return itertools.product(*[range(n) for n in shape]) # generator
 
-    gns = CartGtoPrimPair(gn, gs)
-    # tmp = (gnb*gsb).calc_nai(rb)
-    tmp = gns.calc_overlap()
-    mys2 = str(gn)
-
-    from pyquante22.arb_math import (
-        overlap_tho66 as aove,
-        kinetic_tho66 as akin,
-        nuclear_attraction as anai,
-        coulomb_rep4 as aeri,
+    aoi = arr.ArrayOps(
+        "torch", device="cpu", default_dtype="float64", int_dtype="int64"
     )
-    import pyquante22.arb_math as arb
-    import mpmath as mpm
+    coi = CachedOps(aoi, amax=10)
+    # ao.conv1d = ao.xp.nn.functional.conv1d  # @DEBUG
 
-    def cgp2arb(gto: CartGtoPrim, id=0):
-        l, r, a = gto[id]
-        l = arb.arr_init(l.tolist())
-        r = arb.arr_init(r.tolist())
-        a = arb.arb(a[0].item())
-        return a, l, r
+    def tolegacy(g):
+        if isinstance(g, CartGtoPrim):
+            aas, ams, rrs = g.alpha, g.amom, g.cen
+            ams = ams.reshape(-1)
+            rrs = rrs.reshape(-1)
+            aas = aoi.tile(aas.reshape(-1,1), 3).reshape(-1)
+            return CGP0(ams, rrs, aas)
+        elif isinstance(g, CartGtoPrimPair):
+            return tolegacy(g.ga) * tolegacy(g.gb)
+        raise NotImplementedError
 
-    def cgpp2arb(gpp: CartGtoPrimPair, id=0):
-        alr1 = cgp2arb(gpp.ga, id=id)
-        alr2 = cgp2arb(gpp.gb, id=id)
-        return *alr1, *alr2
+    n = 1
+    ams = aoi.arr([0, 0, 0], dtype=aoi.int_dtype)
+    amx = aoi.arr([-2, 0, 0], dtype=aoi.int_dtype)
+    amp = aoi.arr([1, 0, 0], dtype=aoi.int_dtype)
+    amn = aoi.arr([n, n+1, n+3], dtype=aoi.int_dtype)
+    r0 = aoi.arr([0, 0, 0])
+    rb = aoi.arr([0.125, 0.25, 0.5])
+    aa = aoi.arr([1.0] * 3)
+    gn =  CartGtoPrim(amn, r0, aa, ao=aoi)
+    gs =  CartGtoPrim(ams, r0, aa, ao=aoi)
+    gx =  CartGtoPrim(amx, r0, aa, ao=aoi)
+    gsb = CartGtoPrim(ams, rb, aa, ao=aoi)
+    gp =  CartGtoPrim(amp, r0, aa, ao=aoi)
+    gnb = CartGtoPrim(amn, rb, aa, ao=aoi)
+    gmb = CartGtoPrim(amn+1, rb, aa, ao=aoi)
+    gob = CartGtoPrim(amn+2, rb, aa, ao=aoi)
+    gp_list = [gn, gs, gsb, gp, gnb, gmb, gob]
 
-    tmp = aove(*[*cgp2arb(gs)] * 2)
-    assert mpm.almosteq(tmp, (arb.pi / 2) ** (3 / 2))  # (pi/2)**(3/2)
-    tmp = akin(*[*cgp2arb(gs)] * 2)
-    assert mpm.almosteq(tmp, 3 / 2 * (arb.pi / 2) ** (3 / 2))  # 3/2*(pi/2)**(3/2)
-    tmp = anai(*[*cgp2arb(gs)] * 2, arb.arr_init(r0.tolist()))
-    assert mpm.almosteq(tmp, -arb.pi)  # -pi
-    tmp = aeri(*[*cgp2arb(gs)] * 4)
-    assert mpm.almosteq(tmp, arb.pow(arb.pi, 5 / 2) / 4)  # pi**(5/2) / 4
-
-    gxs = CartGtoPrimPair(gx, gs)
-    tmp = gxs.calc_overlap()
-    assert tmp == 0
-    gt = aove(*cgpp2arb(gxs))
-    assert float(gt) == tmp.item()
-
-    gss = CartGtoPrimPair(gs, gs)
-    gssb = CartGtoPrimPair(gs, gsb)
-    gps = CartGtoPrimPair(gp, gs)
-
-    expected = aeri(*cgpp2arb(gn * gnb), *cgpp2arb(gn * gsb))
-    # result = (gn*gnb|gn*gsb)
-
-    tmp = gn * gnb
-
-    # ans = gss.calc_nai(gs.cen)
-    # ans = (gn*gnb).calc_nai(gnb.cen)
-
-
-    gas = [gs,  gsb, gnb, gnb, gnb]
-    gbs = [gp,  gn,  gnb,  gp, gsb]
-    gpp = CartGtoPrimPair(sum(gas), sum(gbs))
-    ans = gpp.calc_nai(ao.tile(rb, len(gas)))
+    # one body ops to test:
+    # overlap1d, overlap, kinetic, calc_h_array
+    loops = 500
+    t0 = time.time()
+    for _ in range(loops):
+        gab = sum(gp_list) * sum(gp_list[-2::-1])
+    t1 = time.time()
+    print(f"{loops} inits took {t1-t0:.4f}s")
 
 
-    # tpm.binom_pres
-    # 1/65536,0,-1/128,0,1
-    # tensor([[ 1.5259e-05,  0.0000e+00, -7.8125e-03,  0.0000e+00,  1.0000e+00],
-    # tpm.hab
-    # 12161/65536,0,191/8192,1/4096
-    # tensor([[1.8556e-01, 0.0000e+00, 2.3315e-02, 0.0000e+00, 2.4414e-04],
+    methods = ["calc_overlap1d", "calc_overlap", "calc_kinetic", "calc_h_array"]
+    results = [getattr(gab, f)() for f in methods]
+    results = [getattr(gab, f)() for f in methods] # call twice to make sure data isn't corrupted
 
-    import numpy as np
-    from pyquante22.ref_ints.overlap import overlap1d_hh12 as p2ov1
-    from pyquante22.ref_ints.overlap import overlap_hh12 as p2ov
+    for i,j in ndindex(gab.shape):
+        gabl = tolegacy(gab[i,j])
+        for ii, f in enumerate(methods):
+            gt = getattr(gabl, f)()
+            ans = results[ii][i,j]
+            gshap, ashap = gt.shape, ans.shape
+            if gt.nelement() < 2:
+                assert gt.item() == ans.item()
+                continue
+            assert len(gshap) == len(ashap), "ndim mismatch"
+            min_shape = tuple(min(a, b) for a, b in zip(gt.shape, ans.shape))
+            overlap_slices = tuple(slice(0, m) for m in min_shape)
+            gt2 = gt[overlap_slices]
+            an2 = ans[overlap_slices]
+            assert aoi.sum(aoi.abs(an2-gt2)) == 0.0, f"mismatch in {f}"
+            mask = aoi.ones(min_shape, dtype=bool)
+            if min_shape != gt.shape: # check extras
+                gt[overlap_slices] = 0
+                assert aoi.abs(aoi.sum(gt)) == 0, f"gt extras not 0 {f}"
+            if min_shape != ans.shape: # check extras
+                ans[overlap_slices] = 0
+                assert aoi.abs(aoi.sum(ans)) == 0, f"ans extras not 0 {f}"
 
-    # from pyquante22.basis.pq2_one import overlap1d as p2ov1
-    # from pyquante22.basis.pq2_one import overlap as p2ov
-    # from pyquante22.basis.one_ints_pyquante2 import gto_overlap_3d as ov3d
-    from pennylane.qchem.integrals import gaussian_overlap as plov
+            debug_var = 1
 
-    # from pyquante22.basis.pq2_one import kinetic as p2t
-    # from pyquante22.basis.one_ints_pyquante2 import gto_kinetic_3d as t3d
-    from pennylane.qchem.integrals import gaussian_kinetic as plt
 
-    tol = 1.0e-14
 
+    # two body ops to test:
+    # calc_a_array, calc_c_array, calc_nai, calc_eri
+    gp4 = sum(gp_list[:4])
+    gp3 = sum(gp_list[4:7])
+    gp2 = sum(gp_list[:-3:-1])
+    gp1 = sum(gp_list[-2:-3:-1])
+    gab, gcd = gp2*gp3, gp1*gp4
+
+    methods = ["calc_c_array", "calc_eri",]# "calc_nai", "calc_h_array"]
+    results = [getattr(gab, f)(gcd) for f in methods]
+    results = [getattr(gab, f)(gcd) for f in methods] # call twice to make sure data isn't corrupted
+
+    for i,j in ndindex(gab.shape):
+        gabl = tolegacy(gab[i,j])
+        for k, l in ndindex(gcd.shape):
+            gcdl = tolegacy(gcd[k,l])
+
+            for ii, f in enumerate(methods):
+                gt = getattr(gabl, f)(gcdl)
+                ans = results[ii][i,j,k,l]
+                gshap, ashap = gt.shape, ans.shape
+                if gt.nelement() < 2:
+                    assert gt.item() == ans.item()
+                    continue
+                assert len(gshap) == len(ashap), "ndim mismatch"
+                min_shape = tuple(min(a, b) for a, b in zip(gt.shape, ans.shape))
+                overlap_slices = tuple(slice(0, m) for m in min_shape)
+                gt2 = gt[overlap_slices]
+                an2 = ans[overlap_slices]
+                assert aoi.sum(aoi.abs(an2-gt2)) == 0.0, f"mismatch in {f}"
+                mask = aoi.ones(min_shape, dtype=bool)
+                if min_shape != gt.shape: # check extras
+                    gt[overlap_slices] = 0
+                    assert aoi.abs(aoi.sum(gt)) == 0, f"gt extras not 0 {f}"
+                if min_shape != ans.shape: # check extras
+                    ans[overlap_slices] = 0
+                    assert aoi.abs(aoi.sum(ans)) == 0, f"ans extras not 0 {f}"
+
+                debug_var = 1
+
+
+
+    debug_var = 2
     if False:
-        nr0 = np.asarray([0.0] * 3)
-        nrx = np.asarray([0.0, 1.0, 2.0])
-        nry = np.asarray([-0.1, 1.2, 1.75])
-        na0 = np.asarray([0, 0, 0])
-        na2 = np.asarray([2, 0, 0])
-        nax = np.asarray([2, 3, 5])
-        nay = np.asarray([4, 1, 3])
 
-        a = p2ov(1.0, na0, nr0, 1.0, na0, nr0)
-        b = ov3d(1.0, 1.0, nr0, nr0, na0, na0)
-        assert np.abs((a - b) / a) < tol
+        cpp = gpp.calc_c_array_v3(gqq)
+        for ia, ib in ndindex(cpp.shape[0:2]):
+            gab = gpp[ia, ib]
+            gabl = tolegacy(gab)
+            for ic, id in ndindex(cpp.shape[2:4]):
+                gcd = gqq[ic, id]
+                gcdl = tolegacy(gcd)
+                cl = gabl.calc_c_array(gcdl)
+                ls = cl.shape[1]
+                cij = cpp[ia,ib,ic,id,:,:ls]
+                extra = cpp[ia,ib,ic,id,:,ls:]
 
-        a = p2ov(1.0, na2, nr0, 1.0, na0, nr0)
-        b = ov3d(1.0, 1.0, nr0, nr0, na2, na0)
-        assert np.abs((a - b) / a) < tol
 
-        a = p2ov(1.0, na2, nrx, 2.0, na0, nry)
-        b = ov3d(1.0, 2.0, nrx, nry, na2, na0)
-        assert np.abs((a - b) / a) < tol
 
-        a = p2ov(1.0, nax, nrx, 2.0, nay, nry)  #
-        b = ov3d(1.0, 2.0, nrx, nry, nax, nay)
-        c = plov(nax, nay, nrx, nry, 1.0, 2.0)
 
-        arx = ao.arr(nrx)
-        ary = ao.arr(nry)
-        aax = ao.arr(nax, dtype=ao.int_dtype)
-        aay = ao.arr(nay, dtype=ao.int_dtype)
-        gx = CartGtoPrim(aax, arx, ao.arr([1.0] * 3))
-        gy = CartGtoPrim(aay, ary, ao.arr([2.0] * 3))
-        gxy = CartGtoPrimPair(gx, gy)
-        gxx = CartGtoPrimPair(gx, gx)
-        d = gxy.calc_overlap().item()
-        assert np.abs((a - b) / a) < tol
-        assert np.abs((a - c) / a) < tol
-        assert np.abs((a - d) / a) < tol
+        g1 = gn + gsb
+        gp1 = g1 * gmb
+        tmp = gp1.calc_overlap1d()
+        tmp = gp1.calc_overlap()
 
-        a = p2t(1.0, nax, nrx, 2.0, nay, nry)  #
-        b = t3d(1.0, 2.0, nrx, nry, nax, nay)
-        c = plt(nax, nay, nrx, nry, 1.0, 2.0)
-        d = gxy.calc_kinetic().item()
-        assert np.abs((a - b) / a) < tol
-        assert np.abs((a - c) / a) < tol
-        assert np.abs((a - d) / a) < tol
+        tmp = (gs*gs).calc_kinetic().item()
+        gsl = tolegacy(gs)
+        gt = (gsl*gsl).calc_kinetic().item()
+        assert tmp == gt, "kinetic error"
 
-        # e = calc_kinetic2(gxy).item()
 
-        # @TODO: batch into more than 1 3d primitive and try
-        # add tests
-        ga = gx + gy
-        gb = gx + gx
-        gaa = ga * ga
-        gab = ga * gb
-        tmp = CartGtoPrimPair(ga, ga)
-        sga = str(ga)
-
-    debug_var = 1
+        debug_var = 1
