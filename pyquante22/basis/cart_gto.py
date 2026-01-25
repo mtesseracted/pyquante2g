@@ -35,23 +35,23 @@ class CachedOps():
     def _create_combinatorials(self):
         ao, amax = self.ao, self.amax
         self.ghalfs = ao.arr(  # Gamma(n+1/2)
-            [pm.gamma_half_int(n) for n in range(2*amax+1)]
+            [pm.gamma_half_int(n) for n in range(2*amax + 2)]
         ) 
         self.binoms = ao.arr( # n!/(k!(n-k)!)
             [
-                [pm.binom_exact(n, k) for k in range(2 * amax + 2)]
-                for n in range(2 * amax + 2)
+                [pm.binom_exact(n, k) for k in range(4 * amax + 2)]
+                for n in range(4 * amax + 2)
             ]
         )
         self.binom2s = ao.arr( # n!/(k!(n-2k)!)
             [
-                [pm.binom2k_exact(n, k) for k in range(1 * amax + 2)]
-                for n in range(4 * amax + 1)
+                [pm.binom2k_exact(n, k) for k in range(4 * amax + 2)]
+                for n in range(4 * amax + 2)
             ]
         )
         self.binom2ns = ao.arr( # (2n)!/(k!(n-k)!)
             [
-                [pm.binom2n_exact(n, k) for k in range(1 * amax + 2)]
+                [pm.binom2n_exact(n, k) for k in range(2 * amax + 2)]
                 for n in range(2 * amax + 2)
             ]
         )
@@ -499,6 +499,103 @@ class CartGtoPrimPair:
         return ret
     # end def calc_h_array(self):
 
+    def calc_a_array(self, rcen):
+        """THO eq. 2.18 and 3.1 (batched).
+        rcen: (C,nd) or (nd,)
+        returns: (Na,Nb,C,nd,L)
+        """
+        ao, co = self.ao, self.co
+        nd = self.nd
+
+        if getattr(rcen, "ndim", None) == 1:
+            if rcen.shape[0] != nd:
+                raise ValueError("rcen must be shape (nd,) or (C,nd)")
+            rcen = rcen[None, :]
+        if getattr(rcen, "ndim", None) != 2 or rcen.shape[1] != nd:
+            raise ValueError("rcen must be shape (nd,) or (C,nd)")
+
+        Na, Nb = len(self.ga), len(self.gb)
+        C = rcen.shape[0]
+
+        # dPn: (Na,Nb,C,nd)
+        dPn = self.pab[:, :, None, :] - rcen[None, None, :, :]
+
+        # flatten all batch and spatial dims to reuse orig logic
+        bps = self.binom_pres  # (Na,Nb,nd,L)
+        llmax = bps.shape[3] - 1
+        rumax = llmax // 2
+        B = Na * Nb * C * nd
+
+        bipres = ao.broadcast_to(
+            bps[:, :, None, :, :], (Na, Nb, C, nd, llmax + 1)
+        ).reshape(B, llmax + 1)
+        gamma = ao.broadcast_to(
+            self.gamma[:, :, None, None], (Na, Nb, C, nd)
+        ).reshape(B)
+        dPn_flat = dPn.reshape(B)
+
+        irng = co.arange_max[: llmax + 1][None, :, None, None]
+        rrng = co.arange_max[: rumax + 1][None, None, :, None]
+        urng = co.arange_max[: rumax + 1][None, None, None, :]
+        nrurng = -(rrng + urng)
+
+        gpows = ao.pow((4 * gamma)[:, None, None, None], nrurng)
+        cpows = ao.pow(dPn_flat[:, None, None, None], irng + 2 * nrurng)
+
+        iuparity = co.parity[(irng + urng) % 2]
+        terms = iuparity * bipres[:, :, None, None] * cpows * gpows * \
+            co.binom22(irng, rrng, urng)
+
+        imask = (rrng <= irng // 2) & (urng <= (irng - 2 * rrng) // 2)
+        sum_idx = irng - 2 * rrng - urng
+        sum_idx = ao.where(imask, sum_idx, co.arange_max[llmax + 1])
+
+        terms_flat = terms.reshape(B, -1)
+        sum_idx_batch = ao.broadcast_to(sum_idx.reshape(-1), (B, -1))
+        ret = ao.zeros((B, llmax + 2))
+        ao.scatter_add_inplace(ret, 1, sum_idx_batch, terms_flat)
+        ret = ret[:, :-1]
+        return ret.reshape(Na, Nb, C, nd, llmax + 1)
+
+
+    def calc_nai(self, rcen):
+        """Nuclear attraction integral (a*b|R), batched over R.
+        rcen: (C,nd) or (nd,)
+        returns: (Na,Nb,C)
+        """
+        ao, co = self.ao, self.co
+        nd = self.nd
+
+        if getattr(rcen, "ndim", None) == 1:
+            if rcen.shape[0] != nd:
+                raise ValueError("rcen must be shape (nd,) or (C,nd)")
+            rcen = rcen[None, :]
+        if getattr(rcen, "ndim", None) != 2 or rcen.shape[1] != nd:
+            raise ValueError("rcen must be shape (nd,) or (C,nd)")
+
+        Na, Nb = len(self.ga), len(self.gb)
+        C = rcen.shape[0]
+
+        a_array = self.calc_a_array(rcen)  # (Na,Nb,C,nd,L)
+        B = Na * Nb * C
+        a_flat = ao.transpose(a_array.reshape(B, nd, -1), (1, 0, 2))  # (nd,B,L)
+
+        dpc = self.pab[:, :, None, :] - rcen[None, None, :, :]  # (Na,Nb,C,nd)
+        rnp2 = ao.sum(ao.square(dpc), axis=3)  # (Na,Nb,C)
+        fbx = self.gamma[:, :, None] * rnp2   # (Na,Nb,C)
+
+        ijkmax = 3 * a_array.shape[-1]  # @TODO get actual max needed
+        boys = self.ga.gm.fboys(co.arange_max[: ijkmax + 1][None, :], fbx.reshape(B, 1))
+        ret = self.ga.gm.triple_conv_dot(a_flat[0], a_flat[1], a_flat[2], boys)
+        ret = ret.reshape(Na, Nb, C)
+
+        aa = self.ga.alpha[:, None]
+        ab = self.gb.alpha[None, :]
+        rab2 = ao.sum(ao.square(self.ga.cen[:, None, :] - self.gb.cen[None, :, :]), axis=2)
+        ret *= (-2 * co.pi / self.gamma)[:, :, None]
+        ret *= ao.exp(-aa * ab * rab2 / self.gamma)[:, :, None]
+        return ret
+
 
     def calc_c_array(self, other):
         """THO Eqn 3.4, batched over independent (a,b,c,d) indices.
@@ -629,7 +726,7 @@ if __name__ == "__main__":
     aoi = arr.ArrayOps(
         "torch", device="cpu", default_dtype="float64", int_dtype="int64"
     )
-    coi = CachedOps(aoi, amax=10)
+    coi = CachedOps(aoi, amax=6)
     # ao.conv1d = ao.xp.nn.functional.conv1d  # @DEBUG
 
     def tolegacy(g):
@@ -651,26 +748,26 @@ if __name__ == "__main__":
     r0 = aoi.arr([0, 0, 0])
     rb = aoi.arr([0.125, 0.25, 0.5])
     aa = aoi.arr([1.0] * 3)
-    gn =  CartGtoPrim(amn, r0, aa, ao=aoi)
-    gs =  CartGtoPrim(ams, r0, aa, ao=aoi)
-    gx =  CartGtoPrim(amx, r0, aa, ao=aoi)
-    gsb = CartGtoPrim(ams, rb, aa, ao=aoi)
-    gp =  CartGtoPrim(amp, r0, aa, ao=aoi)
-    gnb = CartGtoPrim(amn, rb, aa, ao=aoi)
-    gmb = CartGtoPrim(amn+1, rb, aa, ao=aoi)
-    gob = CartGtoPrim(amn+2, rb, aa, ao=aoi)
+    gn =  CartGtoPrim(amn, r0, aa, ao=aoi, co=coi)
+    gs =  CartGtoPrim(ams, r0, aa, ao=aoi, co=coi)
+    gx =  CartGtoPrim(amx, r0, aa, ao=aoi, co=coi)
+    gsb = CartGtoPrim(ams, rb, aa, ao=aoi, co=coi)
+    gp =  CartGtoPrim(amp, r0, aa, ao=aoi, co=coi)
+    gnb = CartGtoPrim(amn, rb, aa, ao=aoi, co=coi)
+    gmb = CartGtoPrim(amn+1, rb, aa, ao=aoi, co=coi)
+    gob = CartGtoPrim(amn+2, rb, aa, ao=aoi, co=coi)
     gp_list = [gn, gs, gsb, gp, gnb, gmb, gob]
 
-    # one body ops to test:
-    # overlap1d, overlap, kinetic, calc_h_array
-    loops = 500
-    t0 = time.time()
-    for _ in range(loops):
-        gab = sum(gp_list) * sum(gp_list[-2::-1])
-    t1 = time.time()
-    print(f"{loops} inits took {t1-t0:.4f}s")
+    # loops = 500
+    # t0 = time.time()
+    # for _ in range(loops):
+    #     gab = sum(gp_list) * sum(gp_list[-2::-1])
+    # t1 = time.time()
+    # print(f"{loops} inits took {t1-t0:.4f}s")
 
 
+    # one body ops test:
+    gab = sum(gp_list) * sum(gp_list[-2::-1])
     methods = ["calc_overlap1d", "calc_overlap", "calc_kinetic", "calc_h_array"]
     results = [getattr(gab, f)() for f in methods]
     results = [getattr(gab, f)() for f in methods] # call twice to make sure data isn't corrupted
@@ -701,16 +798,47 @@ if __name__ == "__main__":
             debug_var = 1
 
 
-
-    # two body ops to test:
-    # calc_a_array, calc_c_array, calc_nai, calc_eri
+    # two body ops test:
     gp4 = sum(gp_list[:4])
     gp3 = sum(gp_list[4:7])
     gp2 = sum(gp_list[:-3:-1])
     gp1 = sum(gp_list[-2:-3:-1])
     gab, gcd = gp2*gp3, gp1*gp4
+    rcens = gcd.pab.reshape(-1, gcd.nd)
 
-    methods = ["calc_c_array", "calc_eri",]# "calc_nai", "calc_h_array"]
+
+    methods = ["calc_a_array", "calc_nai",]
+    results = [getattr(gab, f)(rcens) for f in methods]
+    results = [getattr(gab, f)(rcens) for f in methods] # call twice to make sure data isn't corrupted
+
+    for i,j in ndindex(gab.shape):
+        gabl = tolegacy(gab[i,j])
+        for k in range(rcens.shape[0]):
+            for ii, f in enumerate(methods):
+                gt = getattr(gabl, f)(rcens[k])
+                ans = results[ii][i,j,k]
+                gshap, ashap = gt.shape, ans.shape
+                if gt.nelement() < 2:
+                    assert gt.item() == ans.item()
+                    continue
+                assert len(gshap) == len(ashap), "ndim mismatch"
+                min_shape = tuple(min(a, b) for a, b in zip(gt.shape, ans.shape))
+                overlap_slices = tuple(slice(0, m) for m in min_shape)
+                gt2 = gt[overlap_slices]
+                an2 = ans[overlap_slices]
+                assert aoi.sum(aoi.abs(an2-gt2)) == 0.0, f"mismatch in {f}"
+                mask = aoi.ones(min_shape, dtype=bool)
+                if min_shape != gt.shape: # check extras
+                    gt[overlap_slices] = 0
+                    assert aoi.abs(aoi.sum(gt)) == 0, f"gt extras not 0 {f}"
+                if min_shape != ans.shape: # check extras
+                    ans[overlap_slices] = 0
+                    assert aoi.abs(aoi.sum(ans)) == 0, f"ans extras not 0 {f}"
+
+                debug_var = 1
+
+
+    methods = ["calc_c_array", "calc_eri",]
     results = [getattr(gab, f)(gcd) for f in methods]
     results = [getattr(gab, f)(gcd) for f in methods] # call twice to make sure data isn't corrupted
 
