@@ -101,6 +101,11 @@ class TorchBackend(ArrayBackend):
         # pad_width is list of (before, after) for each axis
         return F.pad(x, pad=pad_width, mode=mode, value=constant_values)
 
+    def cumprod(self, x, axis=None):
+        if axis is None:
+            return torch.cumprod(x.view(-1), dim=0)
+        return torch.cumprod(x, dim=axis)
+
 #end class TorchBackend(ArrayBackend):
 
 backend_cls = TorchBackend

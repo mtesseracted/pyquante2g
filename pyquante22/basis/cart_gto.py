@@ -416,8 +416,10 @@ class CartGtoPrimPair:
             #@TODO: implement copy for ArrayOps (+0 is a hack)
             ret = self.binom_pres[..., ::2] + co.zero # only take even factors, force copy with +0
         irng = co.arange_max[: ret.shape[-1]][None,None,:]
-        pows = ao.pow(self.gamma[:,:,None], irng)
-        ret *= (co.ghalfs[irng] / pows)[:,:,None,:] # add spatial dim
+        # pows = ao.pow(self.gamma[:,:,None], irng)
+        # ret *= (co.ghalfs[irng] / pows)[:,:,None,:] # add spatial dim
+        pows = ao.pow(self.gamma[:,:,None], -irng) # interstingly this is more accurate
+        ret *= (co.ghalfs[irng] * pows)[:,:,None,:] # add spatial dim
         return ao.sum(ret, axis=3)
 
 
@@ -726,7 +728,7 @@ if __name__ == "__main__":
     aoi = arr.ArrayOps(
         "torch", device="cpu", default_dtype="float64", int_dtype="int64"
     )
-    coi = CachedOps(aoi, amax=6)
+    coi = CachedOps(aoi, amax=20)
     # ao.conv1d = ao.xp.nn.functional.conv1d  # @DEBUG
 
     def tolegacy(g):
@@ -870,35 +872,74 @@ if __name__ == "__main__":
 
                 debug_var = 1
 
-
-
     debug_var = 2
-    if False:
 
-        cpp = gpp.calc_c_array_v3(gqq)
-        for ia, ib in ndindex(cpp.shape[0:2]):
-            gab = gpp[ia, ib]
-            gabl = tolegacy(gab)
-            for ic, id in ndindex(cpp.shape[2:4]):
-                gcd = gqq[ic, id]
-                gcdl = tolegacy(gcd)
-                cl = gabl.calc_c_array(gcdl)
-                ls = cl.shape[1]
-                cij = cpp[ia,ib,ic,id,:,:ls]
-                extra = cpp[ia,ib,ic,id,:,ls:]
+    # CartGtoPrim (Lx,Ly,Lz) (Rx,Ry,Rz) Exp
+    # 4  2  0        0.0000       0.5000      -0.2500    2.0000e+00, 
+    # CartGtoPrim (Lx,Ly,Lz) (Rx,Ry,Rz) Exp
+    # 0  0  0        0.1250       0.1250       0.1250    1.0000e+00
+    ama = aoi.arr([4, 2, 0], dtype=aoi.int_dtype)
+    amb = aoi.arr([0, 0, 0], dtype=aoi.int_dtype)
+    ra = aoi.arr([0, 0.5, -0.25])
+    rb = aoi.arr([0.125, 0.125, 0.125])
+    aa = aoi.arr([2.0])
+    ab = aoi.arr([1.0])
+    ga = CartGtoPrim(ama, ra, aa, ao=aoi, co=coi)
+    gb = CartGtoPrim(amb, rb, ab, ao=aoi, co=coi)
+    gab = CartGtoPrimPair(ga, gb)
+    ans = gab.calc_kinetic().item()
+    gabl = tolegacy(gab)
+    ref = gabl.calc_kinetic().item()
 
-
-
-
-        g1 = gn + gsb
-        gp1 = g1 * gmb
-        tmp = gp1.calc_overlap1d()
-        tmp = gp1.calc_overlap()
-
-        tmp = (gs*gs).calc_kinetic().item()
-        gsl = tolegacy(gs)
-        gt = (gsl*gsl).calc_kinetic().item()
-        assert tmp == gt, "kinetic error"
+    import numpy as np
+    import pyquante22.arb_math as arb
+    from pyquante22.ref_ints.utils import GTO
 
 
-        debug_var = 1
+    def to_np(a):  # to numpy
+        if hasattr(a, "shape"):
+            return np.asarray(a.tolist())
+        return np.asarray(a.item())
+
+    def cgp_scalar(gto: CGP):
+        l = to_np(gto.amom)
+        r = to_np(gto.cen)
+        if hasattr(l, "ndim") and l.ndim == 2:
+            l = l[0]
+        if hasattr(r, "ndim") and r.ndim == 2:
+            r = r[0]
+        return l, r, to_np(gto.alpha[0])
+
+
+    def gto2arb(gto):
+        if isinstance(gto, GTO):
+            l = arb.arr_init(gto.l.tolist())
+            r = arb.arr_init(gto.r.tolist())
+            a = arb.arb(gto.a.item())
+            return [a, l, r]
+        elif isinstance(gto, CGP):
+            l, r, a = cgp_scalar(gto)
+            return gto2arb(GTO(l=l, r=r, a=a))
+        else:
+            raise ValueError(f"Does not support type {type(gto)}")
+
+    def kin_ref(*args):
+        """Kinetic reference, args is one CartGtoPrimPair"""
+        ab = args[0]  # one CGPP
+        la, ra, aa = cgp_scalar(ab.ga)
+        lb, rb, abeta = cgp_scalar(ab.gb)
+        a = GTO(l=la, r=ra, a=aa)
+        b = GTO(l=lb, r=rb, a=abeta)
+        fargs = sum([gto2arb(g) for g in [a, b]], [])
+        return arb.kinetic_tho66(*fargs)
+
+    gt = float(kin_ref(gab))
+
+    err1 = (ans - ref) /ref
+    err2 = (ref - gt) / gt
+    err3 = (ans - gt) / gt
+    print(f"{coi.amax} {err1:.4e} {err2:.4e} {err3:.4e}")
+
+    debug_var = 1
+
+ 

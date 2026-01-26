@@ -54,6 +54,16 @@ def to_np(a):  # to numpy
     return np.asarray(a.item())
 
 
+def cgp_scalar(gto: CGP):
+    l = to_np(gto.amom)
+    r = to_np(gto.cen)
+    if hasattr(l, "ndim") and l.ndim == 2:
+        l = l[0]
+    if hasattr(r, "ndim") and r.ndim == 2:
+        r = r[0]
+    return l, r, to_np(gto.alpha[0])
+
+
 def gto2arb(gto):
     if isinstance(gto, GTO):
         l = arb.arr_init(gto.l.tolist())
@@ -61,10 +71,8 @@ def gto2arb(gto):
         a = arb.arb(gto.a.item())
         return [a, l, r]
     elif isinstance(gto, CGP):
-        return gto2arb(GTO(
-            l=to_np(gto.amom), 
-            r=to_np(gto.cen), 
-            a=to_np(gto.alpha[0])))
+        l, r, a = cgp_scalar(gto)
+        return gto2arb(GTO(l=l, r=r, a=a))
     else:
         raise ValueError(f"Does not support type {type(gto)}")
 
@@ -72,8 +80,10 @@ def gto2arb(gto):
 def ove_ref(*args):
     """Overlap reference, args is one CartGtoPrimPair"""
     ab = args[0]  # one CGPP
-    a = GTO(l=to_np(ab.ga.amom), r=to_np(ab.ga.cen), a=to_np(ab.ga.alpha[0]))
-    b = GTO(l=to_np(ab.gb.amom), r=to_np(ab.gb.cen), a=to_np(ab.gb.alpha[0]))
+    la, ra, aa = cgp_scalar(ab.ga)
+    lb, rb, abeta = cgp_scalar(ab.gb)
+    a = GTO(l=la, r=ra, a=aa)
+    b = GTO(l=lb, r=rb, a=abeta)
     fargs = sum([gto2arb(g) for g in [a, b]], [])
     return arb.overlap_tho66(*fargs)
 
@@ -81,8 +91,10 @@ def ove_ref(*args):
 def kin_ref(*args):
     """Kinetic reference, args is one CartGtoPrimPair"""
     ab = args[0]  # one CGPP
-    a = GTO(l=to_np(ab.ga.amom), r=to_np(ab.ga.cen), a=to_np(ab.ga.alpha[0]))
-    b = GTO(l=to_np(ab.gb.amom), r=to_np(ab.gb.cen), a=to_np(ab.gb.alpha[0]))
+    la, ra, aa = cgp_scalar(ab.ga)
+    lb, rb, abeta = cgp_scalar(ab.gb)
+    a = GTO(l=la, r=ra, a=aa)
+    b = GTO(l=lb, r=rb, a=abeta)
     fargs = sum([gto2arb(g) for g in [a, b]], [])
     return arb.kinetic_tho66(*fargs)
 
@@ -90,8 +102,13 @@ def kin_ref(*args):
 def nai_ref(*args):
     """NAI reference, args is one CartGtoPrimPair and one center"""
     ab, r = args  # two CGPPs
-    a = GTO(l=to_np(ab.ga.amom), r=to_np(ab.ga.cen), a=to_np(ab.ga.alpha[0]))
-    b = GTO(l=to_np(ab.gb.amom), r=to_np(ab.gb.cen), a=to_np(ab.gb.alpha[0]))
+    la, ra, aa = cgp_scalar(ab.ga)
+    lb, rb, abeta = cgp_scalar(ab.gb)
+    a = GTO(l=la, r=ra, a=aa)
+    b = GTO(l=lb, r=rb, a=abeta)
+    r = to_np(r)
+    if hasattr(r, "ndim") and r.ndim == 2:
+        r = r[0]
     fargs = sum([gto2arb(g) for g in [a, b,]], [])
     fargs += [arb.arr_init(r.tolist())]
     return arb.nuclear_attraction(*fargs)
@@ -100,10 +117,14 @@ def nai_ref(*args):
 def eri_ref(*args):
     """ERI reference, args is two CartGtoPrimPair"""
     ab, cd = args  # two CGPPs
-    a = GTO(l=to_np(ab.ga.amom), r=to_np(ab.ga.cen), a=to_np(ab.ga.alpha[0]))
-    b = GTO(l=to_np(ab.gb.amom), r=to_np(ab.gb.cen), a=to_np(ab.gb.alpha[0]))
-    c = GTO(l=to_np(cd.ga.amom), r=to_np(cd.ga.cen), a=to_np(cd.ga.alpha[0]))
-    d = GTO(l=to_np(cd.gb.amom), r=to_np(cd.gb.cen), a=to_np(cd.gb.alpha[0]))
+    la, ra, aa = cgp_scalar(ab.ga)
+    lb, rb, abeta = cgp_scalar(ab.gb)
+    lc, rc, ac = cgp_scalar(cd.ga)
+    ld, rd, ad = cgp_scalar(cd.gb)
+    a = GTO(l=la, r=ra, a=aa)
+    b = GTO(l=lb, r=rb, a=abeta)
+    c = GTO(l=lc, r=rc, a=ac)
+    d = GTO(l=ld, r=rd, a=ad)
     fargs = sum([gto2arb(g) for g in [a, b, c, d]], [])
     return arb.coulomb_rep4(*fargs)
 
@@ -151,7 +172,7 @@ def gto_test_case(request):
         return GTOTestCase(
             name="nai",
             arity=3,
-            arg_iter=lambda gs: ((g, gs[0], gs[0].cen) for g in gs[1:]),
+            arg_iter=lambda gs: ((g, gs[0], gs[0].cen[0]) for g in gs[1:]),
             compute=lambda args: (
                 (args[0] * args[1]).calc_nai(args[2]).item(),
                 float(nai_ref(args[0] * args[1], args[2])),
@@ -189,10 +210,10 @@ def gtos_setup(am_case):
     aone = ao.arr([1] * 3)
     am_s = ao.arr([0] * 3, dtype=ao.int_dtype)
     ret = [
-        CGP(ao.arr(am, dtype=ao.int_dtype), rs[ii % len(rs)], aas[ii % len(aas)])
+        CGP(ao.arr(am, dtype=ao.int_dtype), rs[ii % len(rs)], aas[ii % len(aas)], ao=ao)
         for ii, am in enumerate(find_sum_triplets(am_case))
     ]
-    return [CGP(am_s, ra, aone)] + ret
+    return [CGP(am_s, ra, aone, ao=ao)] + ret
 
 
 def test_gto_int_vs_ref(gtos_setup, gto_test_case):
@@ -203,6 +224,7 @@ def test_gto_int_vs_ref(gtos_setup, gto_test_case):
         perr = diff / gt if gt != 0.0 else diff
         passed = np.isclose(ans, gt, rtol=case.rtol, atol=case.atol)
         if not passed:
+            debug_var = 1
             if case.name == 'nai':
                 ab, r = args[0] * args[1], args[2]
                 a = ab.calc_a_array(r)
@@ -216,7 +238,7 @@ def test_gto_int_vs_ref(gtos_setup, gto_test_case):
                 Ax = arb.A_array(lmn1[0],lmn2[0],dPA[0],dPB[0],dPC[0],alpha1+alpha2)
                 import mpmath as mpm
                 nax = np.asarray(mpm.fp.matrix(Ax))
-                aax = a[0].numpy()
+                aax = a[0, 0, 0, 0].numpy()
                 diffs = aax - nax
                 denom = nax.copy()
                 denom[np.abs(denom) < case.atol] = case.atol
@@ -224,12 +246,11 @@ def test_gto_int_vs_ref(gtos_setup, gto_test_case):
                 amax = np.argmax(perrs)
                 debug_var = 1
 
-            debug_var = 1
 
         assert passed, (
             f"[{case.name}] failed, rtol={case.rtol:.4e}, atol={case.atol:.4e}\n"
             f"    %err={perr:.4e}, gt={gt:.4e}, ans={ans:.4e}, for args:\n"
-            f"    {args.replace('\n', '\n    ')}"
+            f"    {str(args).replace(chr(10), chr(10) + '    ')}"
         )
     
 # @TODO: batch calc and compare
