@@ -772,8 +772,8 @@ class CartGtoPrimPair:
 
 
 if __name__ == "__main__":
-    from pyquante22.basis.cart_gto import CartGtoPrim as CGP0
-    from pyquante22.basis.cart_gto import CartGtoPrimPair as CPP0
+    from pyquante22.basis.cart_gto_orig import CartGtoPrim as CGP0
+    from pyquante22.basis.cart_gto_orig import CartGtoPrimPair as CPP0
 
     def tolegacy(g):
         if isinstance(g, CartGtoPrim):
@@ -855,7 +855,7 @@ if __name__ == "__main__":
     gaslong = gas*10
     gbslong = gbs*10
     times = []
-    for ii in range(1,16):
+    for ii in range(1,7):
         gab = sum(gaslong[:ii]) * sum(gbslong[:ii])
         gcd = sum(gbslong[:ii]) * sum(gaslong[:ii])
         t0 = time.time()

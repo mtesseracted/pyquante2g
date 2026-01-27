@@ -48,6 +48,11 @@ def am_case(request):
     return request.param
 
 
+def ndindex(shape):
+    """flattened index generator for given shape"""
+    return itertools.product(*[range(n) for n in shape]) # generator
+
+
 def to_np(a):  # to numpy
     if hasattr(a, "shape"):
         return np.asarray(a.tolist())
@@ -78,34 +83,32 @@ def gto2arb(gto):
 
 
 def ove_ref(*args):
-    """Overlap reference, args is one CartGtoPrimPair"""
-    ab = args[0]  # one CGPP
-    la, ra, aa = cgp_scalar(ab.ga)
-    lb, rb, abeta = cgp_scalar(ab.gb)
+    """Overlap reference, args are two CartGtoPrim"""
+    la, ra, aa = cgp_scalar(args[0])
+    lb, rb, ab = cgp_scalar(args[1])
     a = GTO(l=la, r=ra, a=aa)
-    b = GTO(l=lb, r=rb, a=abeta)
+    b = GTO(l=lb, r=rb, a=ab)
     fargs = sum([gto2arb(g) for g in [a, b]], [])
     return arb.overlap_tho66(*fargs)
 
 
 def kin_ref(*args):
-    """Kinetic reference, args is one CartGtoPrimPair"""
-    ab = args[0]  # one CGPP
-    la, ra, aa = cgp_scalar(ab.ga)
-    lb, rb, abeta = cgp_scalar(ab.gb)
+    """Kinetic reference, args are two CartGtoPrim"""
+    la, ra, aa = cgp_scalar(args[0])
+    lb, rb, ab = cgp_scalar(args[1])
     a = GTO(l=la, r=ra, a=aa)
-    b = GTO(l=lb, r=rb, a=abeta)
+    b = GTO(l=lb, r=rb, a=ab)
     fargs = sum([gto2arb(g) for g in [a, b]], [])
     return arb.kinetic_tho66(*fargs)
 
 
 def nai_ref(*args):
-    """NAI reference, args is one CartGtoPrimPair and one center"""
-    ab, r = args  # two CGPPs
-    la, ra, aa = cgp_scalar(ab.ga)
-    lb, rb, abeta = cgp_scalar(ab.gb)
+    """NAI reference, args is two CartGtoPrim and one center"""
+    ga, gb, r = args  # 
+    la, ra, aa = cgp_scalar(ga)
+    lb, rb, ab = cgp_scalar(gb)
     a = GTO(l=la, r=ra, a=aa)
-    b = GTO(l=lb, r=rb, a=abeta)
+    b = GTO(l=lb, r=rb, a=ab)
     r = to_np(r)
     if hasattr(r, "ndim") and r.ndim == 2:
         r = r[0]
@@ -115,14 +118,14 @@ def nai_ref(*args):
 
 
 def eri_ref(*args):
-    """ERI reference, args is two CartGtoPrimPair"""
-    ab, cd = args  # two CGPPs
-    la, ra, aa = cgp_scalar(ab.ga)
-    lb, rb, abeta = cgp_scalar(ab.gb)
-    lc, rc, ac = cgp_scalar(cd.ga)
-    ld, rd, ad = cgp_scalar(cd.gb)
+    """ERI reference, args are four CartGtoPrim"""
+    ga, gb, gc, gd = args  # two CGPPs
+    la, ra, aa = cgp_scalar(ga)
+    lb, rb, ab = cgp_scalar(gb)
+    lc, rc, ac = cgp_scalar(gc)
+    ld, rd, ad = cgp_scalar(gd)
     a = GTO(l=la, r=ra, a=aa)
-    b = GTO(l=lb, r=rb, a=abeta)
+    b = GTO(l=lb, r=rb, a=ab)
     c = GTO(l=lc, r=rc, a=ac)
     d = GTO(l=ld, r=rd, a=ad)
     fargs = sum([gto2arb(g) for g in [a, b, c, d]], [])
@@ -133,49 +136,42 @@ def eri_ref(*args):
 class GTOTestCase:
     name: str
     arity: int
-    arg_iter: callable  # yields tuples of GTOs
     compute: callable  # (args) -> (ans, ref)
-    rtol: float
-    atol: float
+    arg_iter: callable = None # (optional) yields tuples of GTOs
+    ref: callable = None # (optional) reference function
+    rtol: float = 16 * EPS
+    atol: float = EPS / 64
 
 
 @pytest.fixture(params=["overlap", "kinetic", "nai", "eri"])
 def gto_test_case(request):
     if request.param == "overlap":
         return GTOTestCase(
-            name="overlap",
-            arity=2,
-            # arg_iter=lambda gtos: itertools.product(gtos, repeat=2),
+            name="overlap", arity=2,
             arg_iter=lambda gs: ((g, gs[0]) for g in gs[1:]),
             compute=lambda args: (
                 (args[0] * args[1]).calc_overlap().item(),
-                float(ove_ref(args[0] * args[1])),
+                float(ove_ref(*args)),
             ),
-            rtol=16 * EPS,
-            atol=EPS / 64,
         )
 
     if request.param == "kinetic":
         return GTOTestCase(
-            name="kinetic",
-            arity=2,
+            name="kinetic", arity=2,
             arg_iter=lambda gs: ((g, gs[0]) for g in gs[1:]),
             compute=lambda args: (
                 (args[0] * args[1]).calc_kinetic().item(),
-                float(kin_ref(args[0] * args[1])),
+                float(kin_ref(*args)),
             ),
-            rtol=16 * EPS,
-            atol=EPS / 64,
         )
 
     if request.param == "nai":
         return GTOTestCase(
-            name="nai",
-            arity=3,
+            name="nai", arity=3,
             arg_iter=lambda gs: ((g, gs[0], gs[0].cen[0]) for g in gs[1:]),
             compute=lambda args: (
                 (args[0] * args[1]).calc_nai(args[2]).item(),
-                float(nai_ref(args[0] * args[1], args[2])),
+                float(nai_ref(*args)),
             ),
             rtol=16 * EPS,  # fails for amax > 10
             atol=EPS / 64,
@@ -183,22 +179,18 @@ def gto_test_case(request):
 
     if request.param == "eri":
         return GTOTestCase(
-            name="eri",
-            arity=4,
-            # arg_iter=lambda gtos: itertools.islice(
-            #     itertools.product(gtos, repeat=4), 1000),
+            name="eri", arity=4,
             arg_iter=lambda gs: ((g, *[gs[0]] * 3) for g in gs[1:]),
             compute=lambda args: (
                 (args[0] * args[1]).calc_eri(args[2] * args[3]).item(),
-                float(eri_ref(args[0] * args[1], args[2] * args[3])),
+                float(eri_ref(*args)),
             ),
             rtol=16 * EPS,  # fail for amom > 17
             atol=EPS / 64,
         )
 
 
-@pytest.fixture
-def gtos_setup(am_case):
+def _build_gto_list(am_case):
     ra = ao.arr([0.125] * 3)
     rb = ao.arr([0.0625] * 3)
     rc = ao.arr([0.0, 0.5, -0.25])
@@ -216,6 +208,11 @@ def gtos_setup(am_case):
     return [CGP(am_s, ra, aone, ao=ao)] + ret
 
 
+@pytest.fixture
+def gtos_setup(am_case):
+    return _build_gto_list(am_case)
+
+
 def test_gto_int_vs_ref(gtos_setup, gto_test_case):
     case = gto_test_case
     for args in case.arg_iter(gtos_setup):
@@ -225,32 +222,77 @@ def test_gto_int_vs_ref(gtos_setup, gto_test_case):
         passed = np.isclose(ans, gt, rtol=case.rtol, atol=case.atol)
         if not passed:
             debug_var = 1
-            if case.name == 'nai':
-                ab, r = args[0] * args[1], args[2]
-                a = ab.calc_a_array(r)
-                aalr = gto2arb(args[0])
-                balr = gto2arb(args[1])
-                alpha1, lmn1, A = aalr
-                alpha2, lmn2, B = balr
-                C = arb.arr_init(r.tolist())
-                P = arb.gto_prod_cen(alpha1,A,alpha2,B)
-                dPA, dPB, dPC = P-A, P-B, P-C
-                Ax = arb.A_array(lmn1[0],lmn2[0],dPA[0],dPB[0],dPC[0],alpha1+alpha2)
-                import mpmath as mpm
-                nax = np.asarray(mpm.fp.matrix(Ax))
-                aax = a[0, 0, 0, 0].numpy()
-                diffs = aax - nax
-                denom = nax.copy()
-                denom[np.abs(denom) < case.atol] = case.atol
-                perrs = np.abs(diffs / denom)
-                amax = np.argmax(perrs)
-                debug_var = 1
-
-
         assert passed, (
             f"[{case.name}] failed, rtol={case.rtol:.4e}, atol={case.atol:.4e}\n"
             f"    %err={perr:.4e}, gt={gt:.4e}, ans={ans:.4e}, for args:\n"
             f"    {str(args).replace(chr(10), chr(10) + '    ')}"
         )
     
-# @TODO: batch calc and compare
+
+@pytest.fixture(params=["overlap", "kinetic", "nai", "eri"])
+def gto_batch_case(request):
+    if request.param == "overlap":
+        return GTOTestCase(
+            name="overlap", arity=2, ref=ove_ref,
+            compute=lambda args: (args[0] * args[1]).calc_overlap(),
+        )
+
+    if request.param == "kinetic":
+        return GTOTestCase(
+            name="kinetic", arity=2, ref=kin_ref,
+            compute=lambda args: (args[0] * args[1]).calc_kinetic(),
+        )
+
+    if request.param == "nai":
+        return GTOTestCase(
+            name="nai", arity=3, ref=nai_ref,
+            compute=lambda args: (args[0] * args[1]).calc_nai(args[2]),
+            rtol = 64*EPS,
+        )
+
+    if request.param == "eri":
+        return GTOTestCase(
+            name="eri", arity=4, ref=eri_ref,
+            compute=lambda args: (args[0] * args[1]).calc_eri(
+                args[2] * args[3]),
+        )
+
+
+def test_batch_vs_ref(gto_batch_case):
+
+    # make s,p,d,f GTOs
+    gto_list = sum([_build_gto_list(i) for i in range(4)], [])[::-1]
+    gbc = gto_batch_case
+
+    if gbc.arity == 2:
+        ga = sum(gto_list[:4])
+        gb = sum(gto_list[4:])
+        args = [ga, gb]
+    elif gbc.arity == 3:
+        ga = sum(gto_list[:4])
+        gb = sum(gto_list[4:9])
+        gc = sum(gto_list[9:])
+        args = [ga, gb, gc.cen]
+    elif gbc.arity == 4:
+        ga, gb = sum(gto_list[:2]), sum(gto_list[2:5])
+        gc, gd = sum(gto_list[5:9]), sum(gto_list[9:])
+        args = [ga, gb, gc, gd]
+
+    ans = gbc.compute(args)
+    for ids in ndindex(ans.shape):
+        a = ans[ids].item()
+        ref_args = [args[i][id] for i, id in enumerate(ids)]
+        gt = float(gbc.ref(*ref_args))
+        diff = a - gt
+        perr = diff / gt if gt != 0.0 else diff
+        passed = np.isclose(a, gt, rtol=gbc.rtol, atol=gbc.atol)
+        if not passed:
+            debug_var = 1
+        assert passed, (
+            f"[batch {gbc.name}] failed at index {ids}, "
+            f"rtol={gbc.rtol:.4e}, atol={gbc.atol:.4e}\n"
+            f"    %err={perr:.4e}, gt={gt:.4e}, ans={a:.4e}, for args:\n"
+            f"    {str([args[i] for i in ids]).replace('\n', '\n    ')}"
+        )
+
+ 

@@ -5,8 +5,6 @@ from pyquante22.basis.cart_gto import CartGtoPrimPair as CGPP
 import pyquante22.array_ops as arr
 
 
-
-
 @pytest.fixture(scope="module")
 def ao_eps():
     EPS = sys.float_info.epsilon
@@ -36,6 +34,34 @@ def test_add(ao_eps):
     assert len(gs) == 1
     gs2 = gs + gs
     assert len(gs2) == 2
+
+
+def test_str(ao_eps):
+    ao, EPS = ao_eps
+    ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
+    r0 = ao.arr([0, 0, 0])
+    aa = ao.arr([1.0] * 3)
+    gto = CGP(ams, r0, aa, ao=ao)
+    s = str(gto)
+    assert "GTO" in s, f"Unexpected str({type(gto)}), was the method updated?"
+
+    gp = CGPP(gto, gto)
+    s = str(gp)
+    assert "PairGTO" in s, f"Unexpected str({type(gp)}), was the method updated?"
+
+
+def test_repr(ao_eps):
+    ao, EPS = ao_eps
+    ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
+    r0 = ao.arr([0, 0, 0])
+    aa = ao.arr([1.0] * 3)
+    gto = CGP(ams, r0, aa, ao=ao)
+    s = repr(gto)
+    assert "CartGtoPrim" in s, f"Unexpected repr({type(gto)}), was the method updated?"
+
+    gp = CGPP(gto, gto)
+    s = repr(gp)
+    assert "A: CartGtoPrim" in s, f"Unexpected repr({type(gp)}), was the method updated?"
 
 
 # @pytest.mark.arb # @DEBUG
