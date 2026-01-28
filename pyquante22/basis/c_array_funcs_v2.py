@@ -522,6 +522,60 @@ def compute_chatgpt2(Hab, Hcd, qp, delta, b2):
     return ans
 
 
+def compute_c_self(Hab, delta, b2):
+    """
+    Specialized version for Hcd == Hab and qp == 0.
+
+    Hab:   (N, L+1)
+    delta: (N, N)   assumed nonzero
+    b2:    (>=2L+1, >=L+1)
+    returns:
+      ans: (N, N, 2L+1) where i = 0..2L
+      (Only i=0..L can be nonzero under qp==0.)
+    """
+    device = Hab.device
+    dtype = Hab.dtype
+
+    N, Lp1 = Hab.shape
+    L = Lp1 - 1
+    S = 2 * L
+    U = L
+
+    b2 = b2[:S + 1, :U + 1].to(device=device, dtype=dtype)
+
+    # ---- sign into Hcd (Hcd == Hab): Hcd_signed[m] = (-1)^m * Hab[m]
+    m = torch.arange(Lp1, device=device, dtype=torch.int64)
+    sign_m = (1 - 2 * (m & 1)).to(dtype)  # +1,-1,+1,-1,...
+    Hcd_signed = Hab * sign_m[None, :]
+
+    # ---- Toeplitz-like windows only for even s = 2u
+    # step=2 yields windows for s = 0,2,4,...,2L
+    Hpad = F.pad(Hcd_signed, (L, L))                          # (N, L+1 + 2L)
+    windows_even = Hpad.unfold(dimension=-1, size=Lp1, step=2)  # (N, L+1, L+1)
+    windows_even = windows_even.flip(-1)
+
+    # ---- C_even[n1,n2,u] = sum_l Hab[n1,l] * Hcd_signed[n2,2u-l]
+    C_even = torch.einsum("nl, msl -> nms", Hab, windows_even)  # (N,N,U+1)
+
+    # ---- 1/delta^i for i=0..U  (delta assumed nonzero)
+    inv_delta = delta.reciprocal()
+    ones = torch.ones_like(inv_delta)[..., None]               # (N,N,1)
+    inv_stack = inv_delta[..., None].expand(N, N, U)           # (N,N,U)
+    inv_delta_pows = torch.cat([ones, inv_stack], dim=-1).cumprod(dim=-1)
+
+    # ---- b2[2i,i] and (-1)^i factors
+    i = torch.arange(U + 1, device=device, dtype=torch.int64)
+    b_diag = b2[2 * i, i]                                      # (U+1,)
+    sign_i = (1 - 2 * (i & 1)).to(dtype)                       # (-1)^i
+
+    scale = sign_i.view(1, 1, -1) * b_diag.view(1, 1, -1)
+    core = C_even * scale * inv_delta_pows                    # (N,N,U+1)
+
+    ans = torch.zeros((N, N, S + 1), device=device, dtype=dtype)
+    ans[:, :, :U + 1] = core
+    return ans
+
+
 
 compute_methods = [
     compute_ref3,

@@ -10,12 +10,12 @@
 # similar order of magnitude, creating a large loss of precision.
 # There's really nothing to be done about it at this point,
 # so I will simply drop the largest amom tested in this file to 
-# 12, which does have acceptable errors. Note the boys function
+# 10, which does have acceptable errors. Note the boys function
 # implementation also has errors on the order of 1e-14 for larger
 # amoms, which could be fixed using branched logic. In the future
 # I think changing out the A, C, and H array calculations with
 # precomputed coefficients will mitigate this problem since
-# there will be much less terms in the sums
+# there will be less terms in the sums
 import pytest, sys, itertools
 from dataclasses import dataclass
 import numpy as np
@@ -174,7 +174,6 @@ def gto_test_case(request):
                 float(nai_ref(*args)),
             ),
             rtol=16 * EPS,  # fails for amax > 10
-            atol=EPS / 64,
         )
 
     if request.param == "eri":
@@ -186,7 +185,6 @@ def gto_test_case(request):
                 float(eri_ref(*args)),
             ),
             rtol=16 * EPS,  # fail for amom > 17
-            atol=EPS / 64,
         )
 
 

@@ -578,7 +578,87 @@ class CartGtoPrimPair:
 
         return cis # (nd,) list of (Na*Nb,Nc*Nd,L+M)
 
+    def calc_c_self(self):
+        """calc C array for self interaction"""
+        # ans[n_1,n_2,i] =
+        # \frac{b2[2i,i]}{\delta[n_1,n_2]^i}
+        # \sum_{l=\max(0,\,2i-M)}^{\min(L,\,2i)}
+        # Hab[n_1,l]\;Hab[n_2,2i-l]\;(-1)^{\,i-l}.
 
+        # since the boys reduces to 1/(2n+1) maybe just do this here?
+        # need to check if it factors appropriately first
+
+        ao, co = self.ao, self.co
+        Na, Nb = len(self.ga), len(self.gb)
+        N1 = Na*Nb
+        hab = self.hab
+        hab = hab.reshape(-1, *hab.shape[2:]) # (Na*Nb,nd,L)
+        hab = ao.transpose(hab, [1, 0, 2]) # (nd,N1,L)
+        gab = self.gamma.reshape(-1) # (Na*Nb)
+        deltas = (0.25 * co.one) / gab #.reshape(-1)
+        deltas = deltas[:,None] + deltas[None,:]
+        # inv_gab = co.one / gab
+        # inv_delta = (4 * co.one) / (inv_gab[:, None] + inv_gab[None, :])
+
+        cis = [None,] * self.nd
+        for id in range(self.nd):
+            cis[id] = self.calc_ci_self(hab[id], deltas, co.binom2s)
+
+        return cis # (nd,) list of (Na*Nb,Nc*Nd,L+M)
+
+
+    def calc_ci_self(self, Hab, delta, b2):
+        """C-array kernel per dimension for self interaction (Hcd == Hab, qp == 0).
+        inv_delta = 1/delta, shape (N1,N1).
+        """
+        ao, co = self.ao, self.co
+
+        N1, Lp1 = Hab.shape
+        L = Lp1 - 1
+        S = 2 * L
+        U = L
+        # b2 = b2[: S + 1, : U + 1]
+
+        # ---- sign into Hcd (Hcd == Hab): Hcd_signed[m] = (-1)^m * Hab[m]
+        m = co.arange_max[:Lp1]
+        sign_m = co.parity[m % 2]
+        Hcd_signed = Hab * sign_m[None, :]
+
+        # ---- Toeplitz-like windows only for even s = 2u
+        # Use a vectorized conv1d on torch to avoid materializing windows_rev.
+        # if ao.backend_name == "torch":
+        Hab_1c = Hab[:, None, :]  # (N1,1,L+1)
+        w = Hcd_signed.flip(-1)[:, None, :]  # convolution kernel
+        C_full = ao.conv1d(Hab_1c, w, padding=L)  # (N1,N1,S+1)
+        C_even = C_full[:, :, 0 : S + 1 : 2]  # (N1,N1,U+1)
+        # else:
+        #     Hpad = ao.pad(Hcd_signed, (L, L))  # (N1, L+1 + 2L)
+        #     s_even = co.arange_max[: S + 1 : 2]  # 0,2,...,2L  (U+1,)
+        #     s_idx = s_even[:, None]              # (U+1,1)
+        #     l_idx = co.arange_max[:Lp1][None, :] # (1,L+1)
+        #     idx_rev = s_idx + (Lp1 - 1 - l_idx)  # (U+1,L+1)
+        #     idx_b = ao.broadcast_to(idx_rev[None, :, :], (N1, Lp1, Lp1))
+        #     Hpad_b = Hpad[:, None, :]
+        #     windows_rev = ao.take_along_axis(Hpad_b, idx_b, axis=2)  # (N1,U+1,L+1)
+
+        #     # C_even[n1,n2,u] = sum_l Hab[n1,l] * Hcd_signed[n2,2u-l]
+        #     C_even = ao.einsum("nl, msl -> nms", Hab, windows_rev)  # (N1,N1,U+1)
+
+        # ---- 1/delta^i for i=0..U  (delta assumed nonzero)
+        inv_delta = delta.reciprocal()
+        ones = ao.ones(inv_delta.shape)[..., None]  # (N1,N1,1)
+        inv_stack = ao.broadcast_to(inv_delta[..., None], (N1, N1, L))
+        inv_delta_pows = ao.cumprod(ao.concat([ones, inv_stack], axis=-1), axis=-1)
+        # ---- scale by (-1)^i * b2[2i,i]
+        i = co.arange_max[: Lp1]
+
+        sign_i = co.parity[i % 2]
+        b_diag = b2[2 * i, i]
+        scale = sign_i[None, None, :] * b_diag[None, None, :]
+        core = C_even * scale * inv_delta_pows  # (N1,N1,U+1)
+        return core
+
+    
     def calc_eri(self, other):
         """Electron repulsion integrals (a*b|c*d) in 4D batch form."""
         ao, co = self.ao, self.co
@@ -676,10 +756,40 @@ if __name__ == "__main__":
     gx =  CartGtoPrim(amx, r0, aa, ao=aoi, co=coi)
     gsb = CartGtoPrim(ams, rb, aa, ao=aoi, co=coi)
     gp =  CartGtoPrim(amp, r0, aa, ao=aoi, co=coi)
+    gna = CartGtoPrim(amn, r0, aa, ao=aoi, co=coi)
     gnb = CartGtoPrim(amn, rb, aa, ao=aoi, co=coi)
     gmb = CartGtoPrim(amn+1, rb, aa, ao=aoi, co=coi)
+    gma = CartGtoPrim(amn+1, r0, aa, ao=aoi, co=coi)
     gob = CartGtoPrim(amn+2, rb, aa, ao=aoi, co=coi)
+    goa = CartGtoPrim(amn+2, r0, aa, ao=aoi, co=coi)
     gp_list = [gn, gs, gsb, gp, gnb, gmb, gob]
+
+    gp1 = sum([gna, gs, gma, goa])
+    gp2 = sum([gnb, gsb, gmb, gob])
+    gp12 = gp1 * gp2
+
+    loops = 100
+    t0 = time.time()
+    for _ in range(loops):
+        cas = gp12.calc_c_array(gp12)
+    t1 = time.time()
+    print(f"orig method took {t1-t0:.4f}s for {loops} loops")
+
+    t0 = time.time()
+    for _ in range(loops):
+        cbs = gp12.calc_c_self()
+    t1 = time.time()
+    print(f"new method took {t1-t0:.4f}s for {loops} loops")
+
+    for i in range(len(cas)):
+        minl = cbs[i].shape[-1]
+        extra = cas[i][:,:,minl:]
+        if extra.nelement() > 0:
+            assert aoi.abs(extra).max() == 0, f"nonzero extra in c array {i}"
+        assert aoi.abs(cas[i][:,:,:minl] - cbs[i]).max() < 1e-16, "c array self mismatch"
+
+    tmp = gp12.calc_eri(gp12)
+
 
     # loops = 500
     # t0 = time.time()
