@@ -6,6 +6,7 @@ from pyquante22.utils.elements import element_symbols
 from pyquante22.utils.file_utils import find_closest_file_match, load_gbs_file
 from pyquante22.basis.cart_gto_utils import am2sym, sym2am, gen_cartesian_momentums
 from pyquante22.basis.cart_gto import CartGtoPrim, CartGtoPrimPair
+import pyquante22.array_ops as arr
 
 # example basis download link from BSE
 # http://www.basissetexchange.org/api/basis/sto-3g/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54
@@ -13,30 +14,14 @@ from pyquante22.basis.cart_gto import CartGtoPrim, CartGtoPrimPair
 # http://www.basissetexchange.org/basis/cc-pvdz/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36
 
 
-def batch_expand(array, new_shape, flatten=True):
-    """ expand the batch dimension of a flat array
-    batch expand an array, assume it was 1D start, with spatial
-    param: new_shape: multi-dim shape
-    param: faltten: whether to flatten the return
-    ! DOESNT WORK
-    """
-    if len(array.shape) != 1:
-        raise ValueError("Only works for 1D arrays")
-    rshape = [1 for _ in new_shape]
-    rshape[new_shape.index(-1)] = len(array)
-
-    array = ao.broadcast_to(array.reshape(rshape), new_shape)
-    if flatten:
-        array = array.reshape(-1)
-    return array
-
-
-class ContractedCartGto():
-    def __init__(self, amom, cen, alphas, coeffs):
+class CartGtoCont():
+    """Contracted Cartesian GTO basis function"""
+    def __init__(self, amom, cen, alphas, coeffs, ao=None):
         self.amom = amom
         self.cen = cen
         self.alphas = alphas
         self.coeffs = coeffs
+        self.ao = ao or arr.get_default_ops()
 
     def __len__(self):
         return len(self.alphas)
@@ -48,44 +33,27 @@ class ContractedCartGto():
         return f"({ll})@<{xx}>#{cnt}"
 
     def __getitem__(self, idx):
-        args = [self.amom, self.cen, ao.tile(self.alphas[idx],3)]
-        return CartGtoPrim(*args)
+        return CartGtoPrim(self.amom, self.cen, self.alphas[idx], self.coeffs[idx])
 
-    def to_prim(self, new_shape=None):
+    def to_prim(self):
         """stack the basis functions into a batch of CartGtoPrim
-
-        new_shape: unpacked shape (multi-dim), expands the batch dim
         """
         sz = len(self) # batch dim
-        amoms = ao.tile(self.amom, sz) # repeat for primitives
-        cens = ao.tile(self.cen, sz)
-        alphas = ao.tile(self.alphas.reshape(-1,1), 3).reshape(-1) # 3d
-
-        if new_shape is not None:
-            rshape = [1 for _ in new_shape] + [3,]
-            new_shape = new_shape + [3,]
-            # amoms = batch_expand(amoms, new_shape)
-            # cens = batch_expand(cens, new_shape)
-            # alphas = batch_expand(alphas, new_shape)
-            rshape[new_shape.index(-1)] = sz
-            amoms = ao.broadcast_to(amoms.reshape(rshape), 
-                new_shape).reshape(-1)
-            cens = ao.broadcast_to(cens.reshape(rshape), 
-                new_shape).reshape(-1)
-            alphas = ao.broadcast_to(alphas.reshape(rshape), 
-                new_shape).reshape(-1)
-
-        return CartGtoPrim(amoms, cens, alphas)
+        amoms = self.ao.tile(self.amom, (sz,1)) # repeat for primitives
+        cens = self.ao.tile(self.cen, (sz,1)) # repeat for primitives
+        return CartGtoPrim(amom=amoms, cen=cens, alpha=self.alphas, 
+                           coeffs=self.coeffs, ao=self.ao) #
 #end class ContractedCartGto():
  
 
 class CartShell():
     """Cartesian shell"""
-    def __init__(self, amtot, cen, alphas, coeffs):
+    def __init__(self, amtot, cen, alphas, coeffs, ao=None):
         self.amtot = amtot
         self.cen = cen
         self.alphas = alphas
         self.coeffs = coeffs
+        self.ao = ao or arr.get_default_ops()
 
     def __len__(self): # nbf * npf (all possible primitives)
         return self.nbf * self.npf
@@ -101,15 +69,26 @@ class CartShell():
     def __repr__(self):
         scen = ','.join(f"{float(v):.2f}" for v in self.cen)
         return f"{am2sym[self.amtot]}-shell @<{scen}> #{self.nbf}({self.npf})"
+    
+    def __getitem__(self, idx):
+        # would need to codify the amom vs primitive ordering to not have to make
+        # all bfs 
+        return self.bfs[idx]
 
     @property
     def bfs(self):
-        bfs = []
-        r, a, c = self.cen, self.alphas, self.coeffs
-        for amom in gen_cartesian_momentums(self.amtot):
-            am = ao.arr(amom, dtype=ao.int_dtype)
-            bfs.append(ContractedCartGto(am, r, a, c))
-        return bfs
+        """all primitives in this shell as one CartGtoPrim"""
+        sz = len(self) # nbf * npf
+        am_list = gen_cartesian_momentums(self.amtot)
+        amoms = self.ao.arr(am_list, dtype=self.ao.int_dtype)
+        # amom is the slow index, necessary for later contraction
+        amoms = self.ao.tile(amoms, (1,self.npf)).reshape(-1,3) 
+        cens = self.ao.tile(self.cen, (sz,1)) # repeat for prims x amoms
+        alphas = self.ao.tile(self.alphas, (self.nbf,1)).reshape(-1)
+        coeffs = self.ao.tile(self.coeffs, (self.nbf,1)).reshape(-1)
+
+        return CartGtoPrim(amom=amoms, cen=cens, alpha=alphas, 
+                            coeffs=coeffs, ao=self.ao)
 #end class CartShell():
 
 
@@ -119,6 +98,7 @@ class BasisSet():
         self.bfs = []
         self.shells = []
         self.shell_range = []
+        ao = molecule.ao
 
         basis_dir = resources.files("pyquante22.basis").joinpath("cart_gto_data")
         basis_file = find_closest_file_match(basis_dir, f"{name}.gbs")
@@ -138,7 +118,7 @@ class BasisSet():
             for sym, prims in basis_data[element_symbols[atom.atno]]:
                 alphas, coeffs = ao.arr(prims.T)
                 amtot = sym2am[sym]
-                curr_shell = CartShell(amtot, cen, alphas ,coeffs)
+                curr_shell = CartShell(amtot, cen, alphas ,coeffs, ao=ao)
                 self.shells.append(curr_shell)
                 self.shell_range.append(
                     slice(self.nbf, self.nbf + curr_shell.nbf))
@@ -156,153 +136,81 @@ class BasisSet():
     def nsh(self): return len(self.shells)
     @property # all possible primitives
     def size(self): return sum(len(s) for s in self.shells)
-    def shell_bfs(self, idx):
-        return self.bfs[self.shell_range[idx]]
-    def atom_symbols(self,geo):
-        return [bf.atom_symbol(geo) for bf in self.bfs]
+    # def shell_bfs(self, idx):
+    #     return self.bfs[self.shell_range[idx]]
+    # def atom_symbols(self,geo):
+    #     return [bf.atom_symbol(geo) for bf in self.bfs]
 #end class BasisSet():
         
 
-import pyquante22.array_ops as arr
-# get an instance of ArrayOps
-ao = arr.ArrayOps(
-    "torch", device="cpu", default_dtype="float64", int_dtype="int64"
-)
+# step 1: find all prim eris between contracted basis ijkl
+# step 2: find all prims between shell pairs ijkl
 
-def ndindex(shape):
-    return itertools.product(*[range(n) for n in shape]) # generator
-
-def eri_shell(shi:CartShell, shj:CartShell, shk:CartShell, shl:CartShell):
-    bfis = shi.bfs
-    bfjs = shj.bfs
-    bfks = shk.bfs
-    bfls = shl.bfs
-    ret = ao.zeros((len(bfis), len(bfjs), len(bfks), len(bfls)))
-    for idx in ndindex(ret.shape):
-        bfi = bfis[idx[0]]
-        bfj = bfjs[idx[1]]
-        bfk = bfks[idx[2]]
-        bfl = bfls[idx[3]]
-        ret[idx] = eri_bf(bfi, bfj, bfk, bfl)
-
-    return ret
-
-
-def eri_bf(bfi, bfj, bfk, bfl): # type ContractedCartGto
-    # unpack bfs into a CartGtoPrims
-    bfs = [bfi, bfj, bfk, bfl]
-    full_sz = [len(bf) for bf in bfs]
-    cgps, coeffs = [None,]*4, [None,]*4
-
-    for ibf, bf in enumerate(bfs):
-
-        new_sz = [-1 if i == ibf else full_sz[i] for i in range(4)]
-        cgps[ibf] = bf.to_prim(new_sz)
-
-        new_sz = [-1 if i == ibf else full_sz[i] for i in range(4)]
-        bcast = [full_sz[i] if ibf == i else 1 for i in range(4)]
-        coeffs[ibf] = ao.broadcast_to(bf.coeffs.reshape(bcast), new_sz).reshape(-1)
-
-    ab = cgps[0] * cgps[1] # 
-    cd = cgps[2] * cgps[3]
-    prim_eris = ab.calc_eri(cd)
-    cs = coeffs[0] * coeffs[1] * coeffs[2] * coeffs[3]
-    na, nb = ab.ga.norm, ab.gb.norm
-    nc, nd = cd.ga.norm, cd.gb.norm
-    ans = ao.einsum('i,i,i,i,i,i', na, nb, nc, nd, cs, prim_eris)
-    return ans
+def eri_contraction_pure(eris, axis_strides, coeffs=None, ao=None):
+    """Contraction of ERIs from primitive to contracted basis
+    works when all contracted basis have same number of primitives per axis
+    eri: 4d array of primitive ERIs
+    axis_strides: num primitives per axis
+    coeffs: (optional) list of contraction coeffs per axis
+    return: 4d array of contracted ERIs
+    """
+    ao = ao or arr.get_default_ops()
+    assert isinstance(eris, ao.ArrayType), "eris must be ArrayType"
+    assert all([s%a == 0 for s,a in zip(eris.shape, axis_strides)]), \
+        "axis_strides must divide eris.shape"
+    angm_lens = [s//a for s,a in zip(eris.shape, axis_strides)]
+    new_shape = sum(list(zip(angm_lens, axis_strides)), ())
+    eri_tmp = eris.reshape(new_shape)
+    if coeffs is None:
+        eri_cont = ao.sum(eri_tmp, axis=(1,3,5,7))
+    else:
+        assert all([len(c) == l for c,l in zip(coeffs, axis_strides)]), \
+            "coeffs lengths must match axis_strides"
+        eri_cont = aoi.einsum('iajbkcld,a,b,c,d->ijkl', eris,
+                        coeffs[0], coeffs[1], coeffs[2], coeffs[3])
+    return eri_cont
+# end def eri_contraction_pure(eris, axis_strides, coeffs, ao=None):
 
 
-def eri_bf_loop(bfi, bfj, bfk, bfl): # type ContractedCartGto
-    # loop version for debugging
-    eris = ao.zeros((len(bfi), len(bfj), len(bfk), len(bfl)))
-    cs = ao.zeros((len(bfi), len(bfj), len(bfk), len(bfl)))
-    ns = ao.zeros((len(bfi), len(bfj), len(bfk), len(bfl)))
-    for idx in ndindex(eris.shape):
-        bi = bfi[idx[0]]
-        bj = bfj[idx[1]]
-        bk = bfk[idx[2]]
-        bl = bfl[idx[3]]
-        eris[idx] = (bi*bj).calc_eri(bk*bl)
-        cs[idx] = bfi.coeffs[idx[0]] * bfj.coeffs[idx[1]] * \
-            bfk.coeffs[idx[2]] * bfl.coeffs[idx[3]]
-        ns[idx] = bi.norm * bj.norm * bk.norm * bl.norm
+def eri_contraction(eris, axis_counts, ao=None):
+    """Contraction of ERIs from primitive to contracted basis
+    works for the general case of not all contracted basis having same
+    number of primitives in an axis
+    eri: 4d array of primitive ERIs
+    axis_counts: list per axis (4,) of list of primitive sizes per basis func
+    return: 4d array of contracted ERIs
+    """
+    # note this makes 3 intermediate copies of the ERI tensor (partial contractions)
+    # if we switch to index_add_ we can do it in place with 1 extra copy?
+    # numpy has reduceat, which would be perfect, maybe make a backend version?
+    ao = ao or arr.get_default_ops()
+    assert isinstance(eris, ao.ArrayType), "eris must be ao.ArrayType"
+    assert eris.ndim == 4
+    assert len(axis_counts) == 4
+    assert all([sum(c) == s for s,c in zip(eris.shape, axis_counts)]), \
+        "axis_counts sums must match eris.shape"
 
-    return ao.sum(cs * ns * eris)
+    def build_bf_ids(counts):
+        nbf = int(counts.numel())
+        return ao.arange(nbf).repeat_interleave(counts)  # (P,)
 
-def build_j2_blocks(basis:BasisSet, cutoff_tol=1e-10):
-    # build the 2d J array max_{ij} (ij|ij) for each ij shell combo
-    # @TODO: build an octree or barnes-hut model of the moleucle,
-    # then only consider the interaction between atoms that are
-    # within a radius in sparse form (is order linear time)
-    nsh = len(basis.shells)
-    B = ao.zeros((nsh,nsh))
-    for i in range(len(basis.shells)):
-        for j in range(i+1):
-            bs = eri_shell(
-                basis.shells[i], basis.shells[j],
-                basis.shells[i], basis.shells[j],)
-            B[i,j] = ao.amax(bs)
+    def contract_axis(x, dim, counts):
+        bf_ids = build_bf_ids(counts)   # (Pdim,)
+        nbf = len(counts)
+        out_shape = [s if i != dim else nbf for i,s in enumerate(x.shape)]
+        out = x.new_zeros(out_shape)
 
-    bmax = ao.amax(B)
-    debug_var = 1
-    return B
+        # torch.scatter_add requires index to have same shape as src
+        idx = bf_ids.view(*([1]*dim), -1, *([1]*(x.ndim-dim-1))).expand_as(x)
+        out.scatter_add_(dim, idx, x)
+        return out
 
-    
+    x = eris
+    for dim in range(4):
+        x = contract_axis(x, dim, axis_counts[dim])
+    return x
+# end def eri_contraction(eris, axis_counts, coeffs, ao=None):
 
-
-
-def build_jk_blocks(basis:BasisSet):
-    nbf = basis.nbf
-    # Dictionary-of-blocks storage (block sparse)
-    J_blocks = {}  # key: (i,j,k,l) -> ndarray (ni,nj,nk,nl)
-    K_blocks = {}  # key: (i,k,j,l) -> ndarray (ni,nk,nj,nl) (permute for exchange)
-    # J = ao.zeros((nbf,)*4)
-    # K = ao.zeros((nbf,)*4)
-
-    pair_list = []
-    for i in range(len(basis.shells)):
-        for j in range(i+1):  # i >= j
-            pair_list.append((i,j,1.0))
-
-    for p, (i, j, Bij) in enumerate(pair_list):
-        for q in range(p+1):         # ensure (ij) >= (kl) in this pair_list ordering
-            k, l, Bkl = pair_list[q]
-            # G has shape (ni, nj, nk, nl)
-            G = eri_shell(
-                basis.shells[i], basis.shells[j],
-                basis.shells[k], basis.shells[l],)
-            
-            J_blocks[(i, j, k, l)] = G
-            K_blocks[(i, k, j, l)] = ao.transpose(G, axes=(0, 2, 1, 3))  # shape (ni, nk, nj, nl)
-
-    return J_blocks, K_blocks
-
-
-def fill_swap_symm(array, ids, vals):
-    """fill (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk)"""
-    array[ids] = vals
-    id2 = ids[1], ids[0], ids[2], ids[3]
-    array[id2] = ao.transpose(vals, (1,0,2,3))
-    id2 = ids[0], ids[1], ids[3], ids[2]
-    array[id2] = ao.transpose(vals, (0,1,3,2))
-    id2 = ids[1], ids[0], ids[3], ids[2]
-    array[id2] = ao.transpose(vals, (1,0,3,2))
-
-def fill_eri_symm(array, ids, vals):
-    """fill (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk), repeat for (kl|ij)"""
-    fill_swap_symm(array, ids, vals) # fill index swaps
-    id2 = ids[2], ids[3], ids[0], ids[1]
-    val2 = ao.transpose(vals, (2,3,0,1))
-    fill_swap_symm(array, id2, val2) # fill pair swaps
-
-def inflate_4d(block, shape, ranges):
-    """inflate a 4d sparse block form (dict of blocks) into full size"""
-    ret = ao.zeros(shape)
-    for ijkl, vals in block.items():
-        ids = tuple([ranges[i] for i in ijkl])
-        fill_eri_symm(ret, ids, vals)
-    return ret
 
 
 if __name__ == "__main__":
@@ -315,14 +223,46 @@ if __name__ == "__main__":
     def nsymm8(n):
         return nsymm(nsymm(n))
 
+    aoi = arr.ArrayOps(
+        "torch", device="cpu", default_dtype="float64", int_dtype="int64"
+    )
+
     xyzs = "F 1 0 0\nH -1 0 0"
     # xyzs = "H 1 0 0\nH -1 0 0"
     # m1 = Molecule(xyzs)
     # b1 = BasisSet(m1, name='sto-3g')
-    m1 = Molecule("./samples/glycine.sdf")
+    m1 = Molecule("./samples/glycine.sdf", ao=aoi)
     print(f"Using molecule: {str(m1)}")
-    b1 = BasisSet(m1, name='sto-3g')
+    # b1 = BasisSet(m1, name='sto-3g')
+    b1 = BasisSet(m1, name='aug-cc-pvqz')
     print(f"with basis: {str(b1)} full J is {b1.nbf**4}, uniqs is {nsymm8(b1.nbf)}")
+
+    s_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('S')] 
+    p_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('P')] 
+    d_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('D')] 
+    f_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('F')] 
+
+    si, sj, sk, sl = b1.shells[s_ids[0]], b1.shells[p_ids[1]], b1.shells[d_ids[0]], b1.shells[s_ids[-1]]
+    gi, gj, gk, gl = si.bfs, sj.bfs, sk.bfs, sl.bfs
+    gij, gkl = gi*gj, gk*gl
+
+    eri_prims = gij|gkl
+    prim_lens = (si.npf, sj.npf, sk.npf, sl.npf)
+    angm_lens = (si.nbf, sj.nbf, sk.nbf, sl.nbf)
+    new_shape = sum(list(zip(angm_lens, prim_lens)), ())
+    eri_tmp = eri_prims.reshape(new_shape)
+    eri_cont = aoi.sum(eri_tmp, axis=(1,3,5,7))
+    # eri2 = aoi.einsum('iajbkcld,a,b,c,d->ijkl', eri_prims,
+    #                   si.coeffs, sj.coeffs, sk.coeffs, sl.coeffs)
+
+    tmp = eri_contraction_pure(eri_prims, prim_lens, ao=aoi)
+
+    axis_counts = [aoi.arr([npf,]*n, dtype=aoi.int_dtype) 
+                   for npf,n in zip(prim_lens, angm_lens)]
+    tmp2 = eri_contraction(eri_prims, axis_counts, ao=aoi)
+
+    assert aoi.abs((tmp-tmp2)/tmp).max().item() < 5e-15, f"mismatch in eri contraction"
+
 
     t0 = time.time()
     Bj = build_j2_blocks(b1)
@@ -345,50 +285,3 @@ if __name__ == "__main__":
         count = mask.sum()
         print(f"{tol:.2e} {count} {count/len(Bjt):.4f}")
 
-
-    t0 = time.time()
-    Jb, Kb = build_jk_blocks(b1)
-    t1 = time.time()
-    print(f"Built JK blocks (nbf={b1.nbf}) in {t1-t0:.2f}s")
-    if b1.nbf < 20:
-        t0 = time.time()
-        J = inflate_4d(Jb, [b1.nbf,]*4, b1.shell_range)
-        t1 = time.time()
-        print(f"Inflated J to 4d (nbf={b1.nbf}) in {t1-t0:.2f}s")
-    debug_var = 1
-
-    # gt = 0.7746059439198978 # from pyscf
-    # ans = J[0,0,0,0].item()
-
-    if False:
-        basis_dir = 'basis/cart_gto_data'
-        basis_files = [f for f in os.listdir(basis_dir) if f.endswith('.gbs')]
-
-        file = 'sto-3g_h_he.gbs'
-        tmp = load_gbs_file(os.path.join(basis_dir, file))
-
-        file = '6-31g.gbs'
-        tmp = load_gbs_file(os.path.join(basis_dir, file))
-
-        file = 'mg3t.gbs'
-        tmp = load_gbs_file(os.path.join(basis_dir, file))
-
-        file = 'mg3.gbs'
-        tmp = load_gbs_file(os.path.join(basis_dir, file))
-
-        file = 'def2-tzvp.gbs'
-        tmp = load_gbs_file(os.path.join(basis_dir, file))
-
-    debug_var = 1
-
-    # the problem: the current functionality needs repmats with 
-    # exact batch matching between a,b,c, and d! quadruple stupid!
-    # the way I wrote pdist2 before was to use advanced indexing
-    # to get repeats when iterating over pairs to calc distance.
-    # so in order to reproduce that we need to support advanced
-    # indexing on ContrCartBasis and/or CartShell
-    # - note: in the PySEC code I use a meshgrid to generate indices,
-    # for this project I want to make it an iterator instead of
-    # actually allocating all indices into memory at once
-    # - also, we should make basis func pairs |ab), and reuse them
-    # when possible

@@ -1,9 +1,8 @@
 import pytest, sys
 import numpy as np
+import pyquante22.array_ops as arr
 from pyquante22.basis.cart_gto import CartGtoPrim as CGP
 from pyquante22.basis.cart_gto import CartGtoPrimPair as CGPP
-import pyquante22.array_ops as arr
-
 
 @pytest.fixture(scope="module")
 def ao_eps():
@@ -34,6 +33,24 @@ def test_add(ao_eps):
     assert len(gs) == 1
     gs2 = gs + gs
     assert len(gs2) == 2
+    gs3 = gs2 + CGP(amp, rb, aa, ao=ao)
+    assert len(gs3) == 3
+
+
+def test_mul(ao_eps):
+    ao, EPS = ao_eps
+    ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
+    amp = ao.arr([1, 0, 0], dtype=ao.int_dtype)
+    r0 = ao.arr([0, 0, 0])
+    rb = ao.arr([0.125, 0.25, 0.5])
+    aa = ao.arr([1.0] * 3)
+    ga = CGP(ams, r0, aa, ao=ao)
+    ga = ga + ga
+    gb = CGP(amp, rb, aa, ao=ao)
+    gmul = ga * gb
+    gab = CGPP(ga, gb)
+    assert gab.shape == gmul.shape
+    assert ao.abs(gab.pab - gmul.pab).max().item() == 0.0
 
 
 def test_str(ao_eps):
@@ -292,3 +309,48 @@ def test_norm_vs_overlap(ao_eps):
             perr = (oovesq - norm) / norm
             assert passed, f"fail @ {str(g1)} %err: {perr:.4e}"
 # end def test_norm_vs_overlap():
+
+
+def test_eri_self(ao_eps):
+    ao, EPS = ao_eps
+    rtol, atol = 16*EPS, 0.0
+    am0 = ao.arr([0, 0, 0], dtype=ao.int_dtype)
+    am1 = ao.arr([3, 1, 1], dtype=ao.int_dtype)
+    am2 = ao.arr([4, 2, 2], dtype=ao.int_dtype)
+    am3 = ao.arr([1, 3, 3], dtype=ao.int_dtype)
+    ra = ao.arr([0, 0, 0])
+    rb = ao.arr([0.125, 0.25, -0.125])
+    am_list = [am0, am1, am2, am3]
+    aa_list = [ao.arr([v]) for v in [0.5, 1.0, 2.0]]
+
+    # test same center and exponent for a and b respectively
+    ga_list = [CGP(am, ra, aa_list[0], ao=ao) for am in am_list]
+    gb_list = [CGP(am, rb, aa_list[1], ao=ao) for am in am_list]
+    ga, gb = sum(ga_list), sum(gb_list)
+    gab = CGPP(ga, gb)
+    assert ao.abs(gab.pab - gab.pab[0]).max().item() == 0, "cannot test eri_self with non-uniform pab"
+
+    ans = gab.calc_eri_self()
+    gt = gab.calc_eri(gab)
+    imxdfiff = ao.xp.argmax(ao.abs(ans - gt)).item()
+    amx, gmx = ans.flatten()[imxdfiff].item(), gt.flatten()[imxdfiff].item()
+    perr = (amx - gmx) / gmx if gmx != 0.0 else amx - gmx
+    passed = perr == 0.0
+    assert passed, f"fail eri_self %err: {perr:.4e}"
+
+    # test same center for both a and b, different exponents
+    ga_list = [CGP(am, ra, aa, ao=ao) for am in am_list for aa in aa_list]
+    gb_list = [CGP(am, ra, aa, ao=ao) for am in am_list[::-1] for aa in aa_list[1:]]
+    ga, gb = sum(ga_list), sum(gb_list)
+    gab = CGPP(ga, gb)
+    assert ao.abs(gab.pab - gab.pab[0]).max().item() == 0, "cannot test eri_self with non-uniform pab"
+
+    ans = gab.calc_eri_self()
+    gt = gab.calc_eri(gab)
+    imxdfiff = ao.xp.argmax(ao.abs(ans - gt)).item()
+    amx, gmx = ans.flatten()[imxdfiff].item(), gt.flatten()[imxdfiff].item()
+    perr = (amx - gmx) / gmx if gmx != 0.0 else amx - gmx
+    passed = perr == 0.0
+    assert passed, f"fail eri_self %err: {perr:.4e}"
+#end def test_eri_self(ao_eps):
+

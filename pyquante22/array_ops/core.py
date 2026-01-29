@@ -32,6 +32,7 @@ manipulation_ops = [
     "take_along_axis",
     "scatter_add",
     "pad",
+    "flip",
 ]
 misc_ops = [
     "unique", # call this a reduction?

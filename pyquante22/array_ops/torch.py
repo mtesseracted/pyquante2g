@@ -78,6 +78,8 @@ class TorchBackend(ArrayBackend):
         ).squeeze(0)
 
     def tile(self, x, n):
+        if hasattr(n, '__len__'):
+            return torch.tile(x, dims=n)
         return torch.tile(x, dims=(n,))
 
     def transpose(self, x, axes=None):
@@ -105,6 +107,14 @@ class TorchBackend(ArrayBackend):
         if axis is None:
             return torch.cumprod(x.view(-1), dim=0)
         return torch.cumprod(x, dim=axis)
+
+    def flip(self, x, axis=None):
+        if axis is not None:
+            if hasattr(axis, 'len'):
+                axis = list(axis)
+            else:
+                axis = [axis]
+        return torch.flip(x, dims=axis)
 
 #end class TorchBackend(ArrayBackend):
 

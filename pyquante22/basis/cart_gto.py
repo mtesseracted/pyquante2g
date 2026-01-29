@@ -24,6 +24,10 @@ class CartGtoPrim:
         self.ao = ao or arr.get_default_ops()
         self.nd = nd
 
+        AT = self.ao.ArrayType
+        assert (isinstance(amom, AT) and isinstance(cen, AT) and isinstance(alpha, AT)), \
+            f"amom, cen, alpha must be {AT} types"
+
         # support getitem with 1 item still batch
         amom = self._cast_batch(amom, nd=self.nd, name="amom") 
         cen  = self._cast_batch(cen,  nd=self.nd, name="cen")
@@ -48,6 +52,7 @@ class CartGtoPrim:
         self.coeffs = coeffs
         self.norm = self.calc_norm() if precompute else None
         if precompute and self.coeffs is not None:
+            assert isinstance(self.coeffs, AT), f"coeffs must be {AT} type"
             self.coeffs = self.coeffs * self.norm
 
 
@@ -231,10 +236,12 @@ class CartGtoPrimPair:
 
     def __or__(self, other):
         # syntactic sugar, ERI: (a*b|c*d), NAI: (a*b|R)
-        if hasattr(other, "shape"):
-            return self.calc_nai(other)  # implemented later
+        if other is self:
+            return self.calc_eri_self()
         if isinstance(other, type(self)):
-            return self.calc_eri(other)  # implemented later
+            return self.calc_eri(other)  #
+        if hasattr(other, "shape"):
+            return self.calc_nai(other)  # 
         raise NotImplementedError(f"No integral implemented for {type(other)}")
 
 
@@ -485,17 +492,10 @@ class CartGtoPrimPair:
         sign_m = co.parity[m % 2]
         Hcd_signed = Hcd * sign_m[None, :]
 
-        # ---- Toeplitz-like windows for convolution
-        Hpad = ao.pad(Hcd_signed, (L, L))          # (N2, Mp1 + 2L)
-        s_idx = co.arange_max[:S + 1][:, None]    # (S+1,1)
-        l_idx = co.arange_max[:Lp1][None, :]    # (1,L+1)
-        idx_rev = s_idx + (Lp1 - 1 - l_idx)                         # (S+1,L+1)
-        idx_b = ao.broadcast_to(idx_rev[None, :, :], (N2, S + 1, Lp1))
-        Hpad_b = Hpad[:, None, :]                                   # (N2,1, Mp1+2L)
-        windows_rev = ao.take_along_axis(Hpad_b, idx_b, axis=2)     # (N2,S+1,L+1)
-
-        # C[n1,n2,s] = \sum_l Hab[n1,l] * (-1)^(s+l-L) * Hcd[n2, s+l-L]
-        C = ao.einsum("nl, msl -> nms", Hab, windows_rev)        # (N1,N2,S+1)
+        # ---- Convolution trick (full length)
+        Hab_1c = Hab[:, None, :]               # (N1,1,L+1)
+        w = ao.flip(Hcd_signed, -1)[:, None, :]    # (N2,1,M+1)
+        C = ao.conv1d(Hab_1c, w, padding=M)    # (N1,N2,S+1)
 
         qp_is_zero = (qp == 0)
 
@@ -597,8 +597,6 @@ class CartGtoPrimPair:
         gab = self.gamma.reshape(-1) # (Na*Nb)
         deltas = (0.25 * co.one) / gab #.reshape(-1)
         deltas = deltas[:,None] + deltas[None,:]
-        # inv_gab = co.one / gab
-        # inv_delta = (4 * co.one) / (inv_gab[:, None] + inv_gab[None, :])
 
         cis = [None,] * self.nd
         for id in range(self.nd):
@@ -609,15 +607,12 @@ class CartGtoPrimPair:
 
     def calc_ci_self(self, Hab, delta, b2):
         """C-array kernel per dimension for self interaction (Hcd == Hab, qp == 0).
-        inv_delta = 1/delta, shape (N1,N1).
         """
         ao, co = self.ao, self.co
 
         N1, Lp1 = Hab.shape
         L = Lp1 - 1
         S = 2 * L
-        U = L
-        # b2 = b2[: S + 1, : U + 1]
 
         # ---- sign into Hcd (Hcd == Hab): Hcd_signed[m] = (-1)^m * Hab[m]
         m = co.arange_max[:Lp1]
@@ -625,24 +620,10 @@ class CartGtoPrimPair:
         Hcd_signed = Hab * sign_m[None, :]
 
         # ---- Toeplitz-like windows only for even s = 2u
-        # Use a vectorized conv1d on torch to avoid materializing windows_rev.
-        # if ao.backend_name == "torch":
         Hab_1c = Hab[:, None, :]  # (N1,1,L+1)
-        w = Hcd_signed.flip(-1)[:, None, :]  # convolution kernel
+        w = ao.flip(Hcd_signed, -1)[:, None, :]  # convolution kernel
         C_full = ao.conv1d(Hab_1c, w, padding=L)  # (N1,N1,S+1)
         C_even = C_full[:, :, 0 : S + 1 : 2]  # (N1,N1,U+1)
-        # else:
-        #     Hpad = ao.pad(Hcd_signed, (L, L))  # (N1, L+1 + 2L)
-        #     s_even = co.arange_max[: S + 1 : 2]  # 0,2,...,2L  (U+1,)
-        #     s_idx = s_even[:, None]              # (U+1,1)
-        #     l_idx = co.arange_max[:Lp1][None, :] # (1,L+1)
-        #     idx_rev = s_idx + (Lp1 - 1 - l_idx)  # (U+1,L+1)
-        #     idx_b = ao.broadcast_to(idx_rev[None, :, :], (N1, Lp1, Lp1))
-        #     Hpad_b = Hpad[:, None, :]
-        #     windows_rev = ao.take_along_axis(Hpad_b, idx_b, axis=2)  # (N1,U+1,L+1)
-
-        #     # C_even[n1,n2,u] = sum_l Hab[n1,l] * Hcd_signed[n2,2u-l]
-        #     C_even = ao.einsum("nl, msl -> nms", Hab, windows_rev)  # (N1,N1,U+1)
 
         # ---- 1/delta^i for i=0..U  (delta assumed nonzero)
         inv_delta = delta.reciprocal()
@@ -660,7 +641,7 @@ class CartGtoPrimPair:
 
     
     def calc_eri(self, other):
-        """Electron repulsion integrals (a*b|c*d) in 4D batch form."""
+        """Electron repulsion integrals (a*b|c*d) in 4D batch form"""
         ao, co = self.ao, self.co
         Na, Nb, Nc, Nd = len(self.ga), len(self.gb), len(other.ga), len(other.gb)
         nd = self.nd
@@ -705,8 +686,7 @@ class CartGtoPrimPair:
         rcd2 = ao.sum(ao.square(rc - rd), axis=2)  # (Nc,Nd)
 
         pref = co.eri_fac / (
-            gab[:, :, None, None]
-            * gcd[None, None, :, :]
+            gab[:, :, None, None] * gcd[None, None, :, :]
             * ao.sqrt(gab[:, :, None, None] + gcd[None, None, :, :])
         )
         ret *= pref
@@ -714,6 +694,47 @@ class CartGtoPrimPair:
         ret *= ao.exp(-ac * ad * rcd2 / gcd)[None, None, :, :]
         return ret
     # end def calc_eri(self, other):
+
+
+    def calc_eri_self(self):
+        """Electron repulsion integrals (a*b|a*b) using calc_c_self"""
+        # Only works in batch-mode if all GTOs pairs have the same P_ab
+        # which means it only works for GTOs is ga and gb having the same
+        # center (P_ab = R_a = R_b) OR all primitives in ga have the same 
+        # center and exponent, and similarly for gb.
+        # Falls back to the general case if the condition is not met.
+        ao, co = self.ao, self.co
+        if ao.abs(self.pab - self.pab[0]).max().item() != 0: # check validity
+            return self.calc_eri(self)  # fallback to general case
+
+        Na, Nb = len(self.ga), len(self.gb)
+        c_array = self.calc_c_self()  # (nd,) list of (Na*Nb,Na*Nb,L+1)
+        B = Na * Nb * Na * Nb
+        c_flat = [ci.reshape(B, -1) for ci in c_array]
+
+        # boys reduces to 1/(2n+1) here
+        ijkmax = c_flat[0].shape[-1] + c_flat[1].shape[-1] + c_flat[2].shape[-1]
+        boys = co.half / (co.arange_max[: ijkmax + 1] + co.half)
+        boys = ao.broadcast_to(boys[None,:], (B, ijkmax+1))
+
+        ret = self.ga.gm.triple_conv_dot(c_flat[0], c_flat[1], c_flat[2], boys)
+        ret = ret.reshape(Na, Nb, Na, Nb)
+
+        # prefactors
+        aa = self.ga.alpha[:, None]
+        ab = self.gb.alpha[None, :]
+        rab2 = ao.sum(ao.square(self.ga.cen[:, None, :] - self.gb.cen[None, :, :]), axis=2)
+
+        gab = self.gamma  # (Na,Nb)
+        pref = co.eri_fac / (
+            gab[:, :, None, None] * gab[None, None, :, :]
+            * ao.sqrt(gab[:, :, None, None] + gab[None, None, :, :])
+        )
+        ret *= pref
+        exp_ab = ao.exp(-aa * ab * rab2 / gab)
+        ret *= exp_ab[:, :, None, None] 
+        ret *= exp_ab[None, None, :, :]
+        return ret
 
 
 
@@ -750,22 +771,27 @@ if __name__ == "__main__":
     amn = aoi.arr([n, n+1, n+3], dtype=aoi.int_dtype)
     r0 = aoi.arr([0, 0, 0])
     rb = aoi.arr([0.125, 0.25, 0.5])
-    aa = aoi.arr([1.0] * 3)
+    rc = aoi.arr([-0.625, 0.125, 0.25])
+    aa = aoi.arr([1.0])
+    ab = aoi.arr([2.0])
     gn =  CartGtoPrim(amn, r0, aa, ao=aoi, co=coi)
     gs =  CartGtoPrim(ams, r0, aa, ao=aoi, co=coi)
     gx =  CartGtoPrim(amx, r0, aa, ao=aoi, co=coi)
-    gsb = CartGtoPrim(ams, rb, aa, ao=aoi, co=coi)
+    gsb = CartGtoPrim(ams, rb, ab, ao=aoi, co=coi)
+    gsc = CartGtoPrim(ams, rc, aa, ao=aoi, co=coi)
     gp =  CartGtoPrim(amp, r0, aa, ao=aoi, co=coi)
     gna = CartGtoPrim(amn, r0, aa, ao=aoi, co=coi)
-    gnb = CartGtoPrim(amn, rb, aa, ao=aoi, co=coi)
-    gmb = CartGtoPrim(amn+1, rb, aa, ao=aoi, co=coi)
+    gnb = CartGtoPrim(amn, rb, ab, ao=aoi, co=coi)
+    gnc = CartGtoPrim(amn, rc, ab, ao=aoi, co=coi)
     gma = CartGtoPrim(amn+1, r0, aa, ao=aoi, co=coi)
-    gob = CartGtoPrim(amn+2, rb, aa, ao=aoi, co=coi)
+    gmb = CartGtoPrim(amn+1, rb, ab, ao=aoi, co=coi)
+    gmc = CartGtoPrim(amn+1, rc, aa, ao=aoi, co=coi)
     goa = CartGtoPrim(amn+2, r0, aa, ao=aoi, co=coi)
+    gob = CartGtoPrim(amn+2, rb, ab, ao=aoi, co=coi)
     gp_list = [gn, gs, gsb, gp, gnb, gmb, gob]
 
-    gp1 = sum([gna, gs, gma, goa])
-    gp2 = sum([gnb, gsb, gmb, gob])
+    gp1 = sum([gnb, gsb, gmb, gob])
+    gp2 = sum([gsb, gnb, gob, gmb])
     gp12 = gp1 * gp2
 
     loops = 100
@@ -788,7 +814,26 @@ if __name__ == "__main__":
             assert aoi.abs(extra).max() == 0, f"nonzero extra in c array {i}"
         assert aoi.abs(cas[i][:,:,:minl] - cbs[i]).max() < 1e-16, "c array self mismatch"
 
-    tmp = gp12.calc_eri(gp12)
+
+    # gp1 = sum([gna, gs, gmc, goa]) # needs check_valid in calc_eri_self
+    gp1 = sum([gnb, gsb, gmb, gob])
+    gp2 = sum([gsb, gnb, gob, gmb])
+    gp12 = gp1 * gp2
+
+    loops = 100
+    t0 = time.time()
+    for _ in range(loops):
+        eas = gp12.calc_eri(gp12)
+    t1 = time.time()
+    print(f"orig method took {t1-t0:.4f}s for {loops} loops")
+
+    t0 = time.time()
+    for _ in range(loops):
+        ebs = gp12.calc_eri_self(check_valid=False)
+    t1 = time.time()
+    print(f"new method took {t1-t0:.4f}s for {loops} loops")
+
+    assert aoi.abs(eas - ebs).max() < 1e-16, "eri self mismatch"
 
 
     # loops = 500
