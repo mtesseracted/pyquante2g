@@ -116,6 +116,57 @@ class TorchBackend(ArrayBackend):
                 axis = [axis]
         return torch.flip(x, dims=axis)
 
+    def segment_sum(self, x, lengths, axis=0):
+        if axis == 0:
+            return torch.segment_reduce(x, lengths=lengths, axis=0, reduce="sum")
+        x2 = x.movedim(axis, 0)
+        y2 = torch.segment_reduce(x2, lengths=lengths, axis=0, reduce="sum")
+        return y2.movedim(0, axis)
+        # tf equivalent: tf.math.segment_sum with a moveaxis for axis!=0
+        # jax equivalent: jax.ops.segment_sum with a moveaxis for axis!=0
+        #  - might need to repeat lengths like in scatter_add, also set indices_are_sorted=True
+        # numpy equivalent: add.reduceat, and ids are cumsum(lengths)
+
+
+    # def segment_weighted_sum(self, x, lengths, coeff, axis=0):
+    #     x0 = x.movedim(axis, 0).reshape(x.shape[axis], -1)
+    #     c0 = coeff.reshape(-1, 1).to(dtype=x0.dtype, device=x0.device)
+
+    #     lengths_t = torch.as_tensor(lengths, device=x0.device, dtype=torch.int64)
+    #     seg_id = torch.repeat_interleave(
+    #         torch.arange(lengths_t.numel(), device=x0.device),
+    #         lengths_t
+    #     )
+
+    #     y0 = torch.zeros((lengths_t.numel(), x0.shape[1]), device=x0.device, dtype=x0.dtype)
+    #     y0.index_add_(0, seg_id, x0 * c0)
+
+    #     out_shape = list(x.shape)
+    #     out_shape[axis] = lengths_t.numel()
+    #     y = y0.reshape([out_shape[axis]] + [s for i, s in enumerate(out_shape) if i != axis]).movedim(0, axis)
+    #     return y
+    def segment_weighted_sum(self, x, lengths, coeff, axis=0):
+        # Move axis to front: (L, R)
+        x0 = x.movedim(axis, 0).reshape(x.shape[axis], -1)  # (L, R)
+        c0 = coeff.reshape(-1, 1).to(dtype=x0.dtype, device=x0.device)  # (L, 1)
+
+        lengths_t = torch.as_tensor(lengths, device=x0.device, dtype=torch.int64)  # (nseg,)
+        seg_id = torch.repeat_interleave(
+            torch.arange(lengths_t.numel(), device=x0.device),
+            lengths_t
+        )  # (L,)
+
+        y0 = torch.zeros((lengths_t.numel(), x0.shape[1]), device=x0.device, dtype=x0.dtype)
+        y0.index_add_(0, seg_id, x0 * c0)  # (nseg, R)
+
+        # Reshape back and restore axis position
+        out_shape = list(x.shape)
+        out_shape[axis] = lengths_t.numel()
+        y = y0.reshape([out_shape[axis]] + [s for i, s in enumerate(out_shape) if i != axis]).movedim(0, axis)
+        return y
+
+
+
 #end class TorchBackend(ArrayBackend):
 
 backend_cls = TorchBackend

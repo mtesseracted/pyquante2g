@@ -66,9 +66,12 @@ class CartShell():
     def npf(self): # num primitive funcs (per basis func)
         return len(self.alphas)
 
-    def __repr__(self):
+    def __mul__(self, other):
+        return CartShellPair(self, other)
+
+    def __repr__(self): # @TODO: make this more descriptive, this should be __str__
         scen = ','.join(f"{float(v):.2f}" for v in self.cen)
-        return f"{am2sym[self.amtot]}-shell @<{scen}> #{self.nbf}({self.npf})"
+        return f"{am2sym[self.amtot]}-shell@<{scen}>#{self.nbf}({self.npf})"
     
     def __getitem__(self, idx):
         # would need to codify the amom vs primitive ordering to not have to make
@@ -91,6 +94,82 @@ class CartShell():
                             coeffs=coeffs, ao=self.ao)
 #end class CartShell():
 
+
+class CartShellPair():
+    """Pair of Cartesian shells"""
+    def __init__(self, shell1, shell2):
+        self.si = shell1
+        self.sj = shell2
+        self.ao = shell1.ao
+        assert self.ao is shell2.ao, "shells must have same ArrayOps backend"
+        self.bfs_ = None
+
+    def __len__(self):
+        return len(self.si) * len(self.sj)
+
+    def __repr__(self):
+        stra = str(self.si)
+        strb = str(self.sj)
+        return f"ShellPair({stra} X {strb})"
+
+    @property
+    def bfs(self):
+        """all primitive pairs in this shell pair as one CartGtoPrimPair"""
+        if self.bfs_ is not None:
+            return self.bfs_
+        gi, gj = self.si.bfs, self.sj.bfs
+        self.bfs_ = CartGtoPrimPair(gi, gj)
+        return self.bfs_
+
+
+    def __or__(self, other):
+        return self.calc_eri(other)
+
+
+    def calc_eri(self, other):
+        eri_prims = self.bfs | other.bfs # OR attempts calc_eri_self first
+        si, sj, sk, sl = self.si, self.sj, other.si, other.sj
+        prim_lens = (si.npf, sj.npf, sk.npf, sl.npf)
+        gi, gj, gk, gl = self.bfs.ga, self.bfs.gb, other.bfs.ga, other.bfs.gb
+        coeffs = gi.coeffs, gj.coeffs, gk.coeffs, gl.coeffs
+        # coeffs = si.coeffs, sj.coeffs, sk.coeffs, sl.coeffs
+        # we could handle either the gi.coeffs (repeated) or the si.coeffs (one per pim)
+        # but using si.coeffs wouldn't have the norms pre-applied
+        eris = self.eri_contraction_pure(eri_prims, prim_lens, 
+                                         coeffs=coeffs, ao=self.si.ao)
+
+        return eris
+
+
+    @staticmethod
+    def eri_contraction_pure(eris, axis_strides, coeffs=None, ao=None):
+        """Contraction of ERIs from primitive to contracted basis
+        works when all contracted basis have same number of primitives per axis
+        eri: 4d array of primitive ERIs
+        axis_strides: num primitives per axis
+        coeffs: (optional) list of contraction coeffs per axis
+        return: 4d array of contracted ERIs
+        """
+        ao = ao or arr.get_default_ops()
+        assert isinstance(eris, ao.ArrayType), "eris must be ArrayType"
+        assert all([s%a == 0 for s,a in zip(eris.shape, axis_strides)]), \
+            "axis_strides must divide eris.shape"
+        angm_lens = [s//a for s,a in zip(eris.shape, axis_strides)]
+        new_shape = sum(list(zip(angm_lens, axis_strides)), ())
+        eri_tmp = eris.reshape(new_shape)
+        if coeffs is None:
+            eri_cont = ao.sum(eri_tmp, axis=(1,3,5,7))
+        else:
+            assert all([len(c) == es for c, es in zip(coeffs, eris.shape)]), \
+                "eri coeffs shape mismatch"
+            coeffs  = [c.reshape(-1, pl) for c,pl in zip(coeffs, axis_strides)]
+            eri_cont = ao.einsum('iajbkcld,ia,jb,kc,ld->ijkl', eri_tmp,
+                            coeffs[0], coeffs[1], coeffs[2], coeffs[3])
+        return eri_cont
+    # end def eri_contraction_pure(eris, axis_strides, coeffs, ao=None):
+
+
+#end class CartShellPair():
 
 class BasisSet():
     def __init__(self, molecule, name='sto-3g', **kwargs):
@@ -146,32 +225,6 @@ class BasisSet():
 # step 1: find all prim eris between contracted basis ijkl
 # step 2: find all prims between shell pairs ijkl
 
-def eri_contraction_pure(eris, axis_strides, coeffs=None, ao=None):
-    """Contraction of ERIs from primitive to contracted basis
-    works when all contracted basis have same number of primitives per axis
-    eri: 4d array of primitive ERIs
-    axis_strides: num primitives per axis
-    coeffs: (optional) list of contraction coeffs per axis
-    return: 4d array of contracted ERIs
-    """
-    ao = ao or arr.get_default_ops()
-    assert isinstance(eris, ao.ArrayType), "eris must be ArrayType"
-    assert all([s%a == 0 for s,a in zip(eris.shape, axis_strides)]), \
-        "axis_strides must divide eris.shape"
-    angm_lens = [s//a for s,a in zip(eris.shape, axis_strides)]
-    new_shape = sum(list(zip(angm_lens, axis_strides)), ())
-    eri_tmp = eris.reshape(new_shape)
-    if coeffs is None:
-        eri_cont = ao.sum(eri_tmp, axis=(1,3,5,7))
-    else:
-        assert all([len(c) == l for c,l in zip(coeffs, axis_strides)]), \
-            "coeffs lengths must match axis_strides"
-        eri_cont = aoi.einsum('iajbkcld,a,b,c,d->ijkl', eris,
-                        coeffs[0], coeffs[1], coeffs[2], coeffs[3])
-    return eri_cont
-# end def eri_contraction_pure(eris, axis_strides, coeffs, ao=None):
-
-
 def eri_contraction(eris, axis_counts, ao=None):
     """Contraction of ERIs from primitive to contracted basis
     works for the general case of not all contracted basis having same
@@ -180,36 +233,55 @@ def eri_contraction(eris, axis_counts, ao=None):
     axis_counts: list per axis (4,) of list of primitive sizes per basis func
     return: 4d array of contracted ERIs
     """
-    # note this makes 3 intermediate copies of the ERI tensor (partial contractions)
-    # if we switch to index_add_ we can do it in place with 1 extra copy?
-    # numpy has reduceat, which would be perfect, maybe make a backend version?
     ao = ao or arr.get_default_ops()
     assert isinstance(eris, ao.ArrayType), "eris must be ao.ArrayType"
-    assert eris.ndim == 4
-    assert len(axis_counts) == 4
+    assert len(axis_counts) == eris.ndim
     assert all([sum(c) == s for s,c in zip(eris.shape, axis_counts)]), \
         "axis_counts sums must match eris.shape"
 
-    def build_bf_ids(counts):
-        nbf = int(counts.numel())
-        return ao.arange(nbf).repeat_interleave(counts)  # (P,)
-
-    def contract_axis(x, dim, counts):
-        bf_ids = build_bf_ids(counts)   # (Pdim,)
-        nbf = len(counts)
-        out_shape = [s if i != dim else nbf for i,s in enumerate(x.shape)]
-        out = x.new_zeros(out_shape)
-
-        # torch.scatter_add requires index to have same shape as src
-        idx = bf_ids.view(*([1]*dim), -1, *([1]*(x.ndim-dim-1))).expand_as(x)
-        out.scatter_add_(dim, idx, x)
-        return out
-
     x = eris
-    for dim in range(4):
-        x = contract_axis(x, dim, axis_counts[dim])
+    dim_ratios = [(i,s//len(c)) for i,(c,s) in enumerate(zip(axis_counts, eris.shape)) 
+                  if s != len(c)] # skip dims that don't need contraction
+    dim_ratios.sort(key=lambda t: t[1], reverse=True) # largest first for efficiency
+    for dim, ratio in dim_ratios:
+        x = ao.segment_sum(x, axis_counts[dim], axis=dim)
     return x
 # end def eri_contraction(eris, axis_counts, coeffs, ao=None):
+
+
+def eri_contraction_weighted(eris, axis_counts, coeffs=None, ao=None):
+    """
+    eris: primitive ERIs with ragged packing along each primitive axis
+    axis_counts: list of 4 lists; axis_counts[d] has n_contracted[d] segment lengths
+    coeffs: list of 4 1D arrays; coeffs[d] length == eris.shape[d]
+                coefficients aligned with the primitive packing of that axis
+    returns: contracted ERIs with shape (nA, nB, nC, nD)
+    """
+    ao = ao or arr.get_default_ops()
+    assert isinstance(eris, ao.ArrayType), "eris must be ao.ArrayType"
+    x = eris
+
+    assert len(axis_counts) == x.ndim
+    if coeffs is not None:
+        assert len(coeffs) == x.ndim
+    for d in range(x.ndim):
+        assert sum(axis_counts[d]) == x.shape[d]
+        assert coeffs[d].shape[0] == x.shape[d] if coeffs is not None else True
+
+    dim_ratios = [(d, x.shape[d] // len(axis_counts[d])) for d in range(4)]
+    dim_ratios.sort(key=lambda t: t[1], reverse=True)
+
+    for dim, _ in dim_ratios:
+        if coeffs is not None:
+            c = coeffs[dim]             # (axis_len,)
+            shape = [1] * x.ndim
+            shape[dim] = c.shape[0]
+            x = x * c.reshape(shape)                     # broadcast, no giant coeff tensor
+        if x.shape[dim] != len(axis_counts[dim]):
+            x = ao.segment_sum(x, axis_counts[dim], axis=dim)
+
+    return x
+#end def eri_contraction_weighted(eris, axis_counts, coeffs=None, ao=None):
 
 
 
@@ -255,6 +327,7 @@ if __name__ == "__main__":
     # eri2 = aoi.einsum('iajbkcld,a,b,c,d->ijkl', eri_prims,
     #                   si.coeffs, sj.coeffs, sk.coeffs, sl.coeffs)
 
+    eri_contraction_pure = CartShellPair.eri_contraction_pure
     tmp = eri_contraction_pure(eri_prims, prim_lens, ao=aoi)
 
     axis_counts = [aoi.arr([npf,]*n, dtype=aoi.int_dtype) 
@@ -263,6 +336,29 @@ if __name__ == "__main__":
 
     assert aoi.abs((tmp-tmp2)/tmp).max().item() < 5e-15, f"mismatch in eri contraction"
 
+    sij, skl = si * sj, sk * sl
+    tmp3 = sij | skl
+
+
+    eri_coeffs = eri_prims  * si.bfs.coeffs[:,None,None,None] \
+                            * sj.bfs.coeffs[None,:,None,None] \
+                            * sk.bfs.coeffs[None,None,:,None] \
+                            * sl.bfs.coeffs[None,None,None,:]
+
+    coeffs = [si.bfs.coeffs, sj.bfs.coeffs, 
+              sk.bfs.coeffs, sl.bfs.coeffs]
+    # coeffs = [c.reshape(-1,pl) for c,pl in zip(coeffs,prim_lens)]
+    tmp4 = eri_contraction_pure(eri_prims, prim_lens, coeffs=coeffs, ao=aoi)
+    tmp5 = eri_contraction_pure(eri_coeffs, prim_lens, ao=aoi)
+
+    assert aoi.abs((tmp4-tmp3)/tmp3).max().item() < 5e-15, f"mismatch in eri contraction2"
+    assert aoi.abs((tmp5-tmp3)/tmp3).max().item() < 5e-15, f"mismatch in eri contraction2"
+
+    tmp6 = eri_contraction(eri_coeffs, axis_counts, ao=aoi)
+    tmp7 = eri_contraction_weighted(eri_prims, axis_counts, coeffs=coeffs, ao=aoi)
+
+    assert aoi.abs((tmp6-tmp3)/tmp3).max().item() < 5e-15, f"mismatch in eri contraction2"
+    assert aoi.abs((tmp7-tmp3)/tmp3).max().item() < 5e-15, f"mismatch in eri contraction2"
 
     t0 = time.time()
     Bj = build_j2_blocks(b1)

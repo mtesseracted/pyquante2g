@@ -38,6 +38,7 @@ misc_ops = [
     "unique", # call this a reduction?
     "einsum",
     "conv1d",
+    "segment_sum",
 ]
 basic_ops = sum([
     math_ops_unary, 

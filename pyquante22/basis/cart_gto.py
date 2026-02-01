@@ -208,9 +208,11 @@ class CartGtoPrimPair:
         self.ga = ga
         self.gb = gb
         self.ao = ga.ao
+        assert self.ao is gb.ao, "CartGtoPrims must have same ArrayOps backend"
         self.co = ga.co # assume no amax issues
 
         if precompute:
+            # @TODO precompute eri prefactors
             self.gamma = ga.alpha[:, None] + gb.alpha[None, :]  # (Na,Nb) exponent sums
             self.pab = self.calc_product_centers()              # (Na,Nb,3) product centers P_AB
             self.binom_pres = self.calc_prod_binoms()           # (Na,Nb,3,Lp)
@@ -829,7 +831,7 @@ if __name__ == "__main__":
 
     t0 = time.time()
     for _ in range(loops):
-        ebs = gp12.calc_eri_self(check_valid=False)
+        ebs = gp12.calc_eri_self()
     t1 = time.time()
     print(f"new method took {t1-t0:.4f}s for {loops} loops")
 
