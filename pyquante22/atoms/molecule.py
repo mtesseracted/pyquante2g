@@ -65,7 +65,7 @@ class Molecule():
 
         if atomlist:
             for atuple in atomlist:
-                atmp = Atom(*atuple)
+                atmp = Atom(*atuple, ao=self.ao)
                 if not self.units == 'bohr':
                     atmp.r *= self._ang2bohr
                 self.atoms.append(atmp)
