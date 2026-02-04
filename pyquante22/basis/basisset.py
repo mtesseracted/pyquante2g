@@ -22,6 +22,7 @@ class CartGtoCont():
         self.alphas = alphas
         self.coeffs = coeffs
         self.ao = ao or arr.get_default_ops()
+        self.bfs_ = None
 
     def __len__(self):
         return len(self.alphas)
@@ -38,22 +39,25 @@ class CartGtoCont():
     def to_prim(self):
         """stack the basis functions into a batch of CartGtoPrim
         """
-        sz = len(self) # batch dim
-        amoms = self.ao.tile(self.amom, (sz,1)) # repeat for primitives
-        cens = self.ao.tile(self.cen, (sz,1)) # repeat for primitives
-        return CartGtoPrim(amom=amoms, cen=cens, alpha=self.alphas, 
-                           coeffs=self.coeffs, ao=self.ao) #
+        if self.bfs_ is None:
+            sz = len(self) # batch dim
+            amoms = self.ao.tile(self.amom, (sz,1)) # repeat for primitives
+            cens = self.ao.tile(self.cen, (sz,1)) # repeat for primitives
+            self.bfs_ = CartGtoPrim(amom=amoms, cen=cens, alpha=self.alphas, 
+                            coeffs=self.coeffs, ao=self.ao) #
+        return self.bfs_
 #end class ContractedCartGto():
  
 
 class CartShell():
-    """Cartesian shell"""
+    """Cartesian Shell"""
     def __init__(self, amtot, cen, alphas, coeffs, ao=None):
         self.amtot = amtot
         self.cen = cen
         self.alphas = alphas
         self.coeffs = coeffs
         self.ao = ao or arr.get_default_ops()
+        self.bfs_ = None
 
     def __len__(self): # nbf * npf (all possible primitives)
         return self.nbf * self.npf
@@ -73,31 +77,96 @@ class CartShell():
         scen = ','.join(f"{float(v):.2f}" for v in self.cen)
         return f"{am2sym[self.amtot]}-shell@<{scen}>#{self.nbf}({self.npf})"
     
-    def __getitem__(self, idx):
-        # would need to codify the amom vs primitive ordering to not have to make
-        # all bfs 
+    def __getitem__(self, idx): # not efficient, just a helper
+        return self.bfs[idx]
+
+    def to_prims(self):
+        am_list = gen_cartesian_momentums(self.amtot)
+        ao = self.ao
+        prims = []
+        for am in am_list:
+            ams = ao.arr(am, dtype=ao.int_dtype).reshape(1,3)
+            amoms = ao.tile(ams, (1, self.npf)).reshape(-1,3)
+            cens = ao.tile(self.cen, (self.npf, 1))
+            prims.append(CartGtoPrim(amom=amoms, cen=cens, 
+                alpha=self.alphas, coeffs=self.coeffs, ao=ao))
+        return prims
+         
+    @property
+    def bfs(self):
+        """all primitives in this shell as one CartGtoPrim"""
+        if self.bfs_ is None:
+            sz = len(self) # nbf * npf
+            am_list = gen_cartesian_momentums(self.amtot)
+            amoms = self.ao.arr(am_list, dtype=self.ao.int_dtype)
+            # amom is the slow index, necessary for later contraction
+            amoms = self.ao.tile(amoms, (1,self.npf)).reshape(-1,3) 
+            cens = self.ao.tile(self.cen, (sz,1)) # repeat for prims x amoms
+            alphas = self.ao.tile(self.alphas, (self.nbf,1)).reshape(-1)
+            coeffs = self.ao.tile(self.coeffs, (self.nbf,1)).reshape(-1)
+            self.bfs_ = CartGtoPrim(amom=amoms, cen=cens, alpha=alphas, 
+                                coeffs=coeffs, ao=self.ao)
+        return self.bfs_
+#end class CartShell():
+
+
+class CartShellBatch():
+    """Cartesian Shell batch"""
+    def __init__(self, shells=[]):
+        self.shells = shells # List of CartShell
+        self.ao = shells[0].ao if len(shells) > 1 else arr.get_default_ops()
+
+    def __len__(self): # nbf * npf (all possible primitives)
+        return sum([len(s) for s in self.shells])
+
+    @property
+    def nsh(self): # num basis funcs
+        return len(self.shells)
+
+    def __mul__(self, other):
+        return CartShellPair(self, other)
+
+    def __repr__(self): # 
+        return ' + '.join(s for s in self.shells)
+    
+    def __getitem__(self, idx): # not efficient, just a helper
         return self.bfs[idx]
 
     @property
     def bfs(self):
         """all primitives in this shell as one CartGtoPrim"""
-        sz = len(self) # nbf * npf
-        am_list = gen_cartesian_momentums(self.amtot)
-        amoms = self.ao.arr(am_list, dtype=self.ao.int_dtype)
-        # amom is the slow index, necessary for later contraction
-        amoms = self.ao.tile(amoms, (1,self.npf)).reshape(-1,3) 
-        cens = self.ao.tile(self.cen, (sz,1)) # repeat for prims x amoms
-        alphas = self.ao.tile(self.alphas, (self.nbf,1)).reshape(-1)
-        coeffs = self.ao.tile(self.coeffs, (self.nbf,1)).reshape(-1)
+        if all(sh.bfs_ is None for sh in self.shells): # none instantiated, build from scratch
+            ao = self.ao
+            sz = len(self)
+            amoms = ao.zeros((sz, 3), dtype=ao.int_dtype)
+            cens = ao.zeros((sz, 3))
+            alphas = ao.zeros((sz,))
+            coeffs = ao.zeros((sz,))
+            icnt = 0
+            am_tots = set([sh.amtot for sh in self.shells])
+            am_lists = {amt:gen_cartesian_momentums(amt) for amt in am_tots}
+            for sh in self.shells:
+                sz = len(sh)
+                ams = ao.arr(am_lists[sh.amtot], dtype=ao.int_dtype)
+                amoms[icnt:icnt+sz] = ao.tile(ams, (1,sh.npf)).reshape(-1,3)
+                cens[icnt:icnt+sz] = ao.tile(sh.cen, (sz, 1))
+                alphas[icnt:icnt+sz] = ao.tile(sh.alphas, (sh.nbf,1)).reshape(-1)
+                coeffs[icnt:icnt+sz] = ao.tile(sh.coeffs, (sh.nbf,1)).reshape(-1)
 
-        return CartGtoPrim(amom=amoms, cen=cens, alpha=alphas, 
-                            coeffs=coeffs, ao=self.ao)
+            return CartGtoPrim(amom=amoms, cen=cens, alpha=alphas, 
+                                coeffs=coeffs, ao=self.ao)
+
+        # some are instantiated, lazy instantiate all, concat with CartGtoPrim.__add__
+        return sum([sh.bfs for sh in self.shells])
+
 #end class CartShell():
+
+
 
 
 class CartShellPair():
     """Pair of Cartesian shells"""
-    def __init__(self, shell1, shell2):
+    def __init__(self, shell1, shell2): # shells are CartShell or CartShellBatch
         self.si = shell1
         self.sj = shell2
         self.ao = shell1.ao
@@ -115,10 +184,9 @@ class CartShellPair():
     @property
     def bfs(self):
         """all primitive pairs in this shell pair as one CartGtoPrimPair"""
-        if self.bfs_ is not None:
-            return self.bfs_
-        gi, gj = self.si.bfs, self.sj.bfs
-        self.bfs_ = CartGtoPrimPair(gi, gj)
+        if self.bfs_ is None:
+            gi, gj = self.si.bfs, self.sj.bfs
+            self.bfs_ = CartGtoPrimPair(gi, gj)
         return self.bfs_
 
 
@@ -127,6 +195,17 @@ class CartShellPair():
 
 
     def calc_eri(self, other):
+        # @TODO: support CartShellBatch types (not a pure contraction)
+        if isinstance(self.si, CartShell) and \
+            isinstance(self.sj, CartShell) and \
+            isinstance(other.si, CartShell) and \
+            isinstance(other.sj, CartShell):
+            return self.calc_eri_pure(other)
+        else:
+            raise NotImplementedError("use the general contraction scheme here")
+
+
+    def calc_eri_pure(self, other):
         eri_prims = self.bfs | other.bfs # OR attempts calc_eri_self first
         si, sj, sk, sl = self.si, self.sj, other.si, other.sj
         prim_lens = (si.npf, sj.npf, sk.npf, sl.npf)
@@ -174,10 +253,11 @@ class CartShellPair():
 class BasisSet():
     def __init__(self, molecule, name='sto-3g', **kwargs):
         self.molecule = molecule
-        self.bfs = []
+        # self.bfs = []
         self.shells = []
         self.shell_range = []
-        ao = molecule.ao
+        self.ao = molecule.ao
+        ao = self.ao
 
         basis_dir = resources.files("pyquante22.basis").joinpath("cart_gto_data")
         basis_file = find_closest_file_match(basis_dir, f"{name}.gbs")
@@ -204,10 +284,33 @@ class BasisSet():
                 self.nbf += curr_shell.nbf
     #end def __init__(self, molecule, name='sto-3g', **kwargs):
 
-    def __getitem__(self,i): 
-        # return self.bfs.__getitem__(i)
-        raise NotImplementedError()
+    def __getitem__(self,idx):
+        # inefficient, only use for debugging
+        if isinstance(idx, slice):
+            start, stop, step = idx.indices(self.nbf)
+            return [self[i] for i in range(start, stop, step)]
 
+        if not isinstance(idx, (int, np.integer)):
+            raise TypeError("BasisSet index must be int or slice")
+
+        if idx < 0:
+            idx += self.nbf
+        if idx < 0 or idx >= self.nbf:
+            raise IndexError("BasisSet index out of range")
+
+        for sh, rng in zip(self.shells, self.shell_range):
+            if rng.start <= idx < rng.stop:
+                local_idx = idx - rng.start
+                return sh.bfs[local_idx]
+
+        raise RuntimeError("Failed to map basis index to a shell")
+
+    @property
+    def bfs(self): # inefficient, only use for debugging
+        return sum([sh.bfs for sh in self.shells])
+
+    def to_prims(self):
+        return sum([sh.to_prims() for sh in self.shells], [])
     def __repr__(self): 
         return f"{self.name} for {self.molecule.hill_formula()} #{self.nsh}({self.nbf})[{self.size}]"
     def __len__(self): return self.nbf
@@ -299,14 +402,14 @@ if __name__ == "__main__":
         "torch", device="cpu", default_dtype="float64", int_dtype="int64"
     )
 
-    xyzs = "F 1 0 0\nH -1 0 0"
+    xyzs = "H 0 0 0\nF 1.4 0 0"
     # xyzs = "H 1 0 0\nH -1 0 0"
     # m1 = Molecule(xyzs)
     # b1 = BasisSet(m1, name='sto-3g')
     m1 = Molecule("./samples/glycine.sdf", ao=aoi)
     print(f"Using molecule: {str(m1)}")
-    # b1 = BasisSet(m1, name='sto-3g')
-    b1 = BasisSet(m1, name='aug-cc-pvqz')
+    b1 = BasisSet(m1, name='sto-3g')
+    # b1 = BasisSet(m1, name='aug-cc-pvqz')
     print(f"with basis: {str(b1)} full J is {b1.nbf**4}, uniqs is {nsymm8(b1.nbf)}")
 
     s_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('S')] 
@@ -314,7 +417,12 @@ if __name__ == "__main__":
     d_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('D')] 
     f_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('F')] 
 
-    si, sj, sk, sl = b1.shells[s_ids[0]], b1.shells[p_ids[1]], b1.shells[d_ids[0]], b1.shells[s_ids[-1]]
+    sii = s_ids[0]
+    sji = p_ids[0] if len(p_ids) > 0 else s_ids[1]
+    ski = d_ids[0] if len(d_ids) > 0 else s_ids[-2]
+    sli = s_ids[-1]
+
+    si, sj, sk, sl = b1.shells[sii], b1.shells[sji], b1.shells[ski], b1.shells[sli]
     gi, gj, gk, gl = si.bfs, sj.bfs, sk.bfs, sl.bfs
     gij, gkl = gi*gj, gk*gl
 
@@ -380,4 +488,3 @@ if __name__ == "__main__":
         mask = Bjt > tol
         count = mask.sum()
         print(f"{tol:.2e} {count} {count/len(Bjt):.4f}")
-

@@ -57,6 +57,15 @@ version of JIT instead of decoratores, e.g. torch.script(), jax.jit(),
 cupy is questionable?, tf.function()
     - cupy can use cp.RawKernel(), but it takes a string, not a function
 - add tests for Molecule class, test NN energy, and marble test all init methods
+- need a dedicated 2-center 3-GTO ERI for doing RI and Cholesky, which we will 
+    want later so we can efficiently calculate higher-dim ERIs
+- Add an SCF class that can do RHF and UHF
+- since the pipeline works with torch now we need a set of tests for ArrayOps
+    that will test every operation available against torch as a reference
+- finish the numpy/cupy/jax/tensorflow backends, add to the tests for cart_gto
+- Analysis scripts:
+    - Speed of some test calculations vs PySCF on cpu (& gpu ideally)
+    - Speed and accuracy of our ERIs vs Libint and Libcint (arb_math reference)
 
 
 ## Future Ideas
