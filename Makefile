@@ -20,7 +20,7 @@ scrub:
 
 # Editable install
 install:
-	pip3 install -e ".[all]""
+	pip3 install -e ".[all]"
 
 PKG := $(notdir $(shell pwd))
 uninstall:

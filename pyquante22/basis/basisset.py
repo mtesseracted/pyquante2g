@@ -47,6 +47,39 @@ class CartGtoCont():
                             coeffs=self.coeffs, ao=self.ao) #
         return self.bfs_
 #end class ContractedCartGto():
+
+
+class CartGtoContPair():
+    """make this auto-handle contractions and coefficients"""
+    def __init__(self, ga, gb):
+        # ga, gb are CartGtoPrims
+        self.gab = ga * gb
+        self.cab = ga.coeffs, gb.coeffs
+        self.ao = ga.ao
+
+    def __str__(self):
+        return str(self.gab)
+    def __repr__(self):
+        return "CartGtoContPair:\n" + repr(self.gab)
+
+    def calc_overlap(self):
+        prim_vals = self.gab.calc_overlap()
+        return self.ao.einsum('ij,i,j', prim_vals, *self.cab)
+
+    def calc_kinetic(self):
+        prim_vals = self.gab.calc_kinetic()
+        return self.ao.einsum('ij,i,j', prim_vals, *self.cab)
+
+    def calc_nai(self, rcen):
+        prim_vals = self.gab.calc_kinetic(rcen)
+        return self.ao.einsum('ijk,i,j->k', prim_vals, *self.cab)
+
+    def calc_eri(self, other):
+        prim_vals = self.gab | other.gab
+        return self.ao.einsum('ijkl,i,j,k,l', prim_vals, *self.cab, *other.cab)
+
+    def __or__(self, other):
+        return self.calc_eri(other)
  
 
 class CartShell():
@@ -114,7 +147,7 @@ class CartShellBatch():
     """Cartesian Shell batch"""
     def __init__(self, shells=[]):
         self.shells = shells # List of CartShell
-        self.ao = shells[0].ao if len(shells) > 1 else arr.get_default_ops()
+        self.ao = shells[0].ao if len(shells) > 0 else arr.get_default_ops()
 
     def __len__(self): # nbf * npf (all possible primitives)
         return sum([len(s) for s in self.shells])
@@ -131,6 +164,11 @@ class CartShellBatch():
     
     def __getitem__(self, idx): # not efficient, just a helper
         return self.bfs[idx]
+
+    def __str__(self):
+        return " ".join([str(sh) for sh in self.shells])
+    def __repr__(self):
+        return "\n".join([repr(sh) for sh in self.shells])
 
     @property
     def bfs(self):
@@ -176,6 +214,10 @@ class CartShellPair():
     def __len__(self):
         return len(self.si) * len(self.sj)
 
+    @property
+    def shape(self):
+        return 
+
     def __repr__(self):
         stra = str(self.si)
         strb = str(self.sj)
@@ -195,14 +237,13 @@ class CartShellPair():
 
 
     def calc_eri(self, other):
-        # @TODO: support CartShellBatch types (not a pure contraction)
         if isinstance(self.si, CartShell) and \
             isinstance(self.sj, CartShell) and \
             isinstance(other.si, CartShell) and \
             isinstance(other.sj, CartShell):
             return self.calc_eri_pure(other)
-        else:
-            raise NotImplementedError("use the general contraction scheme here")
+
+        return self.calc_eri_ragged(other)
 
 
     def calc_eri_pure(self, other):
@@ -218,6 +259,25 @@ class CartShellPair():
                                          coeffs=coeffs, ao=self.si.ao)
 
         return eris
+
+
+    def calc_eri_ragged(self, other):
+        """General ERI contraction that supports CartShellBatch on any axis."""
+        eri_prims = self.bfs | other.bfs
+        gi, gj, gk, gl = self.bfs.ga, self.bfs.gb, other.bfs.ga, other.bfs.gb
+        coeffs = gi.coeffs, gj.coeffs, gk.coeffs, gl.coeffs
+        axis_counts = (
+            self._axis_counts(self.si),
+            self._axis_counts(self.sj),
+            self._axis_counts(other.si),
+            self._axis_counts(other.sj),
+        )
+        return self.eri_contraction_ragged(
+            eri_prims,
+            axis_counts=axis_counts,
+            coeffs=coeffs,
+            ao=self.si.ao,
+        )
 
 
     @staticmethod
@@ -246,6 +306,66 @@ class CartShellPair():
                             coeffs[0], coeffs[1], coeffs[2], coeffs[3])
         return eri_cont
     # end def eri_contraction_pure(eris, axis_strides, coeffs, ao=None):
+
+
+    @staticmethod
+    def _axis_counts(shell):
+        """Primitive segment lengths per contracted basis function."""
+        if isinstance(shell, CartShell):
+            return [shell.npf] * shell.nbf
+        if isinstance(shell, CartShellBatch):
+            counts = []
+            for sh in shell.shells:
+                counts.extend([sh.npf] * sh.nbf)
+            return counts
+        raise TypeError(f"Unsupported shell type: {type(shell)}")
+
+
+    @staticmethod
+    def _segment_sum_fallback(x, lengths, axis, ao):
+        """Backend-agnostic segment sum using slicing + stack."""
+        if len(lengths) == 0:
+            raise ValueError("lengths cannot be empty")
+        outs = []
+        start = 0
+        for seg in lengths:
+            stop = start + int(seg)
+            sl = [slice(None)] * x.ndim
+            sl[axis] = slice(start, stop)
+            outs.append(ao.sum(x[tuple(sl)], axis=axis))
+            start = stop
+        return ao.stack(outs, axis=axis)
+
+
+    @classmethod
+    def eri_contraction_ragged(cls, x, axis_counts, coeffs=None, ao=None):
+        """Contraction of ERIs with non-uniform primitive strides per axis."""
+        ao = ao or arr.get_default_ops()
+        assert isinstance(x, ao.ArrayType), "eris must be ArrayType"
+        assert len(axis_counts) == x.ndim
+        if coeffs is not None:
+            assert len(coeffs) == x.ndim
+        for d in range(x.ndim):
+            assert sum(axis_counts[d]) == x.shape[d]
+            if coeffs is not None:
+                assert coeffs[d].shape[0] == x.shape[d]
+
+        dim_ratios = [(d, x.shape[d] // len(axis_counts[d])) for d in range(x.ndim)]
+        dim_ratios.sort(key=lambda t: t[1], reverse=True)
+
+        for dim, _ in dim_ratios:
+            if coeffs is not None:
+                c = coeffs[dim]
+                shape = [1] * x.ndim
+                shape[dim] = c.shape[0]
+                x = x * c.reshape(shape)
+            if x.shape[dim] != len(axis_counts[dim]):
+                try:
+                    x = ao.segment_sum(x, axis_counts[dim], axis=dim)
+                except Exception:
+                    x = cls._segment_sum_fallback(x, axis_counts[dim], axis=dim, ao=ao)
+
+        return x
 
 
 #end class CartShellPair():

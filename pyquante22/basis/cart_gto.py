@@ -53,6 +53,8 @@ class CartGtoPrim:
         self.norm = self.calc_norm() if precompute else None
         if precompute and self.coeffs is not None:
             assert isinstance(self.coeffs, AT), f"coeffs must be {AT} type"
+            if getattr(coeffs, "ndim", 0) == 0: # scalar
+                coeffs = self.ao.arr([coeffs])
             self.coeffs = self.coeffs * self.norm
 
 
@@ -73,9 +75,10 @@ class CartGtoPrim:
     def __getitem__(self, idx): # returns the same type
         coeffs = None if self.coeffs is None else self.coeffs[idx]
         ret = CartGtoPrim(self.amom[idx], self.cen[idx],self.alpha[idx],
-            coeffs=coeffs, nd=self.nd, ao=self.ao, co=self.co,
+            coeffs=coeffs, nd=self.nd, ao=self.ao, co=self.co, gm=self.gm,
             precompute=False,)
-        if self.norm is not None: ret.norm = self.norm[idx]
+        if self.norm is not None: ret.norm = self.norm[idx:idx+1]
+        if self.coeffs is not None: ret.coeffs = self.coeffs[idx:idx+1]
         return ret
 
     def __len__(self):
@@ -94,9 +97,13 @@ class CartGtoPrim:
             nd=self.nd,
             ao=self.ao,
             co=self.co,
+            gm=self.gm,
             precompute=False,
         )
-        ret.norm = ret.calc_norm()
+        if self.coeffs is not None and other.coeffs is not None:
+            ret.coeffs = self.ao.concat([self.coeffs, other.coeffs], axis=0)
+        if self.norm is not None and other.norm is not None:
+            ret.norm = self.ao.concat([self.norm, other.norm], axis=0)
         return ret
 
     def __radd__(self, other):

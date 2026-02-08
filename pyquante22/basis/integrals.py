@@ -2,8 +2,13 @@ import os
 import time
 import itertools
 import pyquante22.array_ops as arr
-from pyquante22.basis.basisset import BasisSet
+from pyquante22.basis.basisset import (
+    BasisSet, CartGtoContPair, CartShellBatch,
+    CartShellPair,
+)
+
 from pyquante22.atoms.molecule import Molecule
+
 
 
 def ndindex(shape):
@@ -40,10 +45,14 @@ class IntegralEngine():
         self.shell_pairs = {} # sparse rep of shell pairs, discards non-overlapping shells
         self.shell_pair_ove_max = None # overlap max between shells, assigns 1.0 if shells share a center
         self.shell_pair_eri_max = None # eri max of shells with themselves
+        self.eri_screen_min = 0.0
         # item values are (CartShellPair, max_overlap), max_overlap is always 1 if the Pair share the same center
 
         if precompute: # fill shell_pairs
             self.fill_screened_overlap_pairs()
+            self.pair_order ={ # canonical pair order for 4d (triu with pairs of pairs)
+                ids: idx for idx, ids in enumerate(ndindex_unique(self.basis.nsh, 2))
+            }
     #end def __init__(self, basis, overlap_tol=1e-12, max_mem=None, precompute=True):
 
 
@@ -89,6 +98,7 @@ class IntegralEngine():
             raise NotImplementedError("@TODO feature")
 
         self.shell_pair_eri_max = pair_max
+        self.eri_screen_min = pair_max[pair_max > 0].min().item()
 
 
     def build_one_electron_matrices(self):
@@ -146,16 +156,12 @@ class IntegralEngine():
         if self.shell_pair_eri_max is None:
             self.fill_screened_eri_pairs()
 
-        eris = {}
+        eri_dict = {}
         pairs_list = list(self.shell_pairs.items())
         pair_max = self.shell_pair_eri_max
         pairs_sorted = sorted(pairs_list, key=lambda x: pair_max[x[0]], reverse=True)
-        # Canonical pair order used by build_eri_4d (list(ndindex_unique(...))).
-        pair_order = {
-            ids: idx for idx, ids in enumerate(ndindex_unique(self.basis.nsh, 2))
-        }
-        smallest_nonzero = pair_max[pair_max > 0].min()
-        single_tol = self.eri_screen_tol / smallest_nonzero
+        single_tol = self.eri_screen_tol / self.eri_screen_min
+
         for ii, (ids, sij) in enumerate(pairs_sorted):
             ibound = self.shell_pair_eri_max[ids]
             if ibound < single_tol:
@@ -168,12 +174,13 @@ class IntegralEngine():
                 if kbound < ktol:
                     break
 
-                if pair_order[ids] >= pair_order[kds]:
-                    eris[ids+kds] = sij | skl
+                if self.pair_order[ids] >= self.pair_order[kds]:
+                    eri_dict[ids+kds] = sij | skl
                 else:
-                    eris[kds+ids] = skl | sij
+                    eri_dict[kds+ids] = skl | sij
 
-        return eris
+        return eri_dict
+
 
     def build_eri_4d(self, eri_dict=None):
         if eri_dict is None:
@@ -195,10 +202,9 @@ class IntegralEngine():
 
     def build_eri_4d_ref(self, eri_dict=None):
         """build in full loop form for error-checking"""
+        # still exploit 4-fold symmetry though
         nbf = self.basis.nbf
-
         bfs = self.basis.to_prims()
-
         eri4d = self.ao.zeros((self.basis.nbf,)*4)
         for ii in range(nbf):
             gi = bfs[ii]
@@ -318,6 +324,93 @@ class IntegralEngine():
         cls._fill_swap_symm(array, id2, val2, ao)
 
 
+    def calc_eri_batch(self, pair_id, only_triu=False):
+        ids = pair_id
+        if ids not in self.shell_pairs:
+            return {}
+
+        ibound = self.shell_pair_eri_max[ids]
+        if ibound < (self.eri_screen_tol / self.eri_screen_min):
+            return {}
+
+        sij = self.shell_pairs[ids]
+        pairs_list = list(self.shell_pairs.items())
+        pair_max = self.shell_pair_eri_max
+        pairs_sorted = sorted(pairs_list, key=lambda x: pair_max[x[0]], reverse=True)
+        sorted_pos = {pair_ids: i for i, (pair_ids, _) in enumerate(pairs_sorted)}
+        ii = sorted_pos[ids] if only_triu else 0
+
+        # skl_list = []
+        kds_list = []
+        ktol = self.eri_screen_tol / ibound
+        for kk in range(ii, len(pairs_sorted)):
+            kds, skl = pairs_sorted[kk]
+            kbound = pair_max[kds]
+            if kbound < ktol:
+                break
+
+            # skl_list.append(skl)
+            kds_list.append(kds)
+
+        debug_var = 1
+        kds_sort = sorted(kds_list)
+        batch_size = 3
+        ret = {}
+        batch_count = len(kds_sort) // batch_size
+        if len(kds_sort) % batch_size != 0: batch_count += 1
+
+        for ibatch in range(batch_count):
+            ks = slice(ibatch*batch_size, (ibatch+1)*batch_size)
+            kds = kds_sort[ks]
+            ks = list(set(kl[0] for kl in kds))
+            ls = list(set(kl[1] for kl in kds))
+            gk = CartShellBatch([self.basis.shells[k] for k in ks])
+            gl = CartShellBatch([self.basis.shells[k] for k in ls])
+            skl = CartShellPair(gk, gl)
+            eris = sij | skl # batched calculation
+
+            cnt = 0
+            kszs = [cnt := cnt+sh.nbf for sh in gk.shells] # cumsum
+            cnt = 0
+            lszs = [cnt := cnt+sh.nbf for sh in gl.shells]
+
+            kmap = {k:i for i,k in enumerate(ks)}
+            lmap = {k:i for i,k in enumerate(ls)}
+            for k,l in kds:
+                ek, el = kmap[k], lmap[l]
+                klo = 0 if ek == 0 else kszs[ek-1]
+                khi = kszs[ek] if ek < len(kszs) else None
+                llo = 0 if el == 0 else lszs[el-1]
+                lhi = lszs[el] if el < len(lszs) else None
+                if self.pair_order[ids] >= self.pair_order[(k,l)]:
+                    ret[ids+(k,l)] = eris[:,:,klo:khi,llo:lhi]
+                else:
+                    ret[(k,l)+ids] = self.ao.transpose(
+                        eris[:,:,klo:khi,llo:lhi],
+                        (2,3,0,1))
+
+            debug_var = 1
+        return ret
+        # what we need to do instead is batch over the l dim, which we can do
+        # with the existing machinery and not compute extra terms. We can
+        # also batch k and l at once and go ahead and compute the missing
+        # cross terms, which is fine, or fill them in with zeros so we don't
+        # actually compute that pair from scratch.
+        # we still need to do an efficient __add__ implementation for ShellPair
+        # or CartPair where it concats the hab terms instead of recomputing.
+        # We can add the machinery there to fill in missing cross terms
+        # with the computed hab or zeros
+
+        # skl = sum(skl_list) # @TODO, handle sum and ERI over ragged strides
+        # bfk_list = [skl.si.bfs for skl in skl_list]
+        # bfl_list = [skl.sj.bfs for skl in skl_list]
+        # gk = CartShellBatch([skl.si for skl in skl_list])
+        # gl = CartShellBatch([skl.sj for skl in skl_list])
+        # skl = CartShellPair(gk, gl)
+        # ret = sij | skl
+        # return ret
+
+
 #end class IntegralEngine():
 
 
@@ -429,6 +522,53 @@ if __name__ == "__main__":
         perrs = diffs[mask] / eri_ref[mask]
         assert aoi.abs(perrs).max().item() < 5e-15, f"mismatch in sparse eri building"
 
+    # cg0 = b1.bfs[0]
+    bfs = b1.to_prims()
+    for i, bf in enumerate(bfs):
+        print(f"BF[{i}]: {str(bf)}")
+
+    cp00 = CartGtoContPair(bfs[0], bfs[0])
+    cp01 = CartGtoContPair(bfs[0], bfs[1])
+    cp10 = CartGtoContPair(bfs[1], bfs[0])
+    cp05 = CartGtoContPair(bfs[0], bfs[5])
+
+    ove01 = cp01.calc_overlap()
+    ove05 = cp05.calc_overlap()
+    eri0001 = cp00 | cp01
+    eri0010 = cp00 | cp01
+    eri0005 = cp00 | cp05
+
+    #@TODO: batch ERIs 
+    # ver1: good for direct_sum scf style
+    #   so it will compute the (ij|kl) for a fixed (ij| and concat all the relevant |kl)
+    #   sub-step: need to support adding Pairs so it doesn't recompute hab
+    # ver2: create a global |kl) object, then index into that so there's no recalculation of H_array
+    # ver3: sweep through the molecule (maybe build a tree for traversal), as you sweep you grow/shrink
+    #   the |kl) object to what is locally relevant and calculate all the (ij| from members of |kl)
+    #   in this version you return an iterator to the user so you define the traversal order
+
+    # cleanups: change the basis.bfs and basis.to_prims() naming convention, it's backwards
+    # NB: we're getting to the point where we're using syntactic sugar and calling
+    # high level functions, if the AI can't code it correctly that's a point against us. 
+    # it should start obeying the KISS principle now, and if the AI can't code the solution 
+    # we're definitely not KISS
+
+    # tmp = ie1.calc_eri_batch((2,3))
+    t0 = time.perf_counter()
+    eri_dict2 = {}
+    for ids in ndindex_unique(b1.nsh, 2):
+        eri_dict2.update(ie1.calc_eri_batch(ids, only_triu=True))
+    t1 = time.perf_counter()
+    print(f"Time to batch build sparse eri dict: {t1-t0:.2f}s")
+
+    assert set(eri_dict.keys()) == set(eri_dict2.keys()), "calc_eri_batch(only_triu) make different quartets"
+
+    eri4d2 = ie1.build_eri_4d(eri_dict2)
+    diffs = eri4d2 - eri4d
+    mask = aoi.abs(eri4d) > 0
+    perrs = diffs[mask] / eri4d[mask]
+    pmax = aoi.abs(perrs).max().item()
+    assert pmax < 1e-15, f"relative error of eri batch build and sparse build disagree max%err: {pmax:.2e}"
 
 
     debug_var = 1
