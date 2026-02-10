@@ -166,6 +166,9 @@ class TorchBackend(ArrayBackend):
         return y
 
 
+    def eigh(self, x):
+        return torch.linalg.eigh(x)
+
 
 #end class TorchBackend(ArrayBackend):
 

@@ -67,6 +67,10 @@ cupy is questionable?, tf.function()
     - Speed of some test calculations vs PySCF on cpu (& gpu ideally)
     - Speed and accuracy of our ERIs vs Libint and Libcint (arb_math reference)
 
+### For v0 publication:
+- Finish the RHF example
+- Make an example that uses backprop to do something (back prop to atom positions?)
+
 
 ## Future Ideas
 - Make a pure s-type only HF/DFT calculation where basis functions dof's

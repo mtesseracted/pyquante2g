@@ -26,7 +26,7 @@ figs = ["matplotlib"]
 all = ["gpu","dev","test","figs"]
 
 [tool.black]
-line-length = 82
+line-length = 98
 target-version = ["py38"]
 skip-string-normalization = true    # Do NOT normalize quotes (you use both intentionally)
 skip-magic-trailing-comma = true    # Avoid exploding collections unless necessary

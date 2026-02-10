@@ -1,105 +1,175 @@
 import os
 import time
 import itertools
+from dataclasses import dataclass
 import pyquante22.array_ops as arr
 from pyquante22.basis.basisset import (
-    BasisSet, CartGtoContPair, CartShellBatch,
+    BasisSet,
+    CartGtoContPair,
+    CartShellBatch,
     CartShellPair,
 )
 
-from pyquante22.atoms.molecule import Molecule
-
-
-
 def ndindex(shape):
     """n-dim index generator"""
-    return itertools.product(*[range(n) for n in shape]) # generator
+    return itertools.product(*[range(n) for n in shape])  # generator
 
 
 def ndindex_unique(n, ndim):
     """n-dim equivalent generator of triu indices"""
     return itertools.combinations_with_replacement(range(n), ndim)
 
+
 def ndindex_unique_8fold(n):
     """
-    Unique indices for an 8-fold symmetric 4d tensor. 
+    Unique indices for an 8-fold symmetric 4d tensor (triu of triu)
     symmetry: (ijkl) = (jikl) = (ijlk) = (jilk); (ijkl) = (klij)
     ordering: i <= j; k <= l; (i, j) <= (k, l) lexicographically
     """
-    pairs = list(itertools.combinations_with_replacement(range(n), 2))
-    for (i, j), (k, l) in itertools.combinations_with_replacement(pairs, 2):
+    pairs = list(ndindex_unique(n, 2))
+    for (i, j), (k, l) in ndindex_unique(pairs, 2):
         yield i, j, k, l
 
 
-class IntegralEngine():
+@dataclass
+class EriScreenContext:
+    pair_max: object  # matrix of ERI maxs between shell i and j
+    pairs_sorted: list  # shell pairs, sorted by pair_max values
+    pair_pos: dict  # shell pair position in pairs_sorted
+    single_tol: object  # screening tolerance of a single pair
+
+
+class IntegralEngine:
     """batch compute integral engine
     should work like DataLoader, you give it the 'dataset', which is a basis.
     Then you request a set of matrices and it will yield them back to you in batches
     """
-    def __init__(self, basis, overlap_tol=1e-12, eri_screen_tol=None, max_mem=None, precompute=True):
+
+    def __init__(
+        self,
+        basis,
+        overlap_tol=1e-12,
+        eri_screen_tol=None,
+        max_mem=None,
+        precompute=True,
+    ):
         self.basis = basis
         self.ao = basis.ao
         self.max_mem = max_mem
         self.overlap_tol = self.ao.arr(overlap_tol)
-        self.eri_screen_tol = self.overlap_tol if eri_screen_tol is None else self.ao.arr(eri_screen_tol)
-        self.shell_pairs = {} # sparse rep of shell pairs, discards non-overlapping shells
-        self.shell_pair_ove_max = None # overlap max between shells, assigns 1.0 if shells share a center
-        self.shell_pair_eri_max = None # eri max of shells with themselves
+        self.eri_screen_tol = (
+            self.overlap_tol
+            if eri_screen_tol is None
+            else self.ao.arr(eri_screen_tol)
+        )
+        self.shell_pairs = (
+            {}
+        )  # sparse rep of shell pairs, discards non-overlapping shells
+        self.shell_pair_ove_max = None  # overlap max between shells, assigns 1.0 if shells share a center
+        self.shell_pair_eri_max = None  # eri max of shells with themselves
         self.eri_screen_min = 0.0
+        self.pair_order = None
+        self.pairs_sorted = None
+        self.pair_pos = None
+        self.one_e_mats = {}
+        self.eri_sparse = {}
         # item values are (CartShellPair, max_overlap), max_overlap is always 1 if the Pair share the same center
 
-        if precompute: # fill shell_pairs
+        if precompute:  # fill shell_pairs and pair-order/sorted caches
             self.fill_screened_overlap_pairs()
-            self.pair_order ={ # canonical pair order for 4d (triu with pairs of pairs)
-                ids: idx for idx, ids in enumerate(ndindex_unique(self.basis.nsh, 2))
-            }
-    #end def __init__(self, basis, overlap_tol=1e-12, max_mem=None, precompute=True):
+            self._ensure_pair_order()
+            self._prepare_screen_state()
 
+    # end def __init__(self, basis, overlap_tol=1e-12, max_mem=None, precompute=True):
+
+    def _invalidate_after_overlap_change(self):
+        """Invalidate all caches that depend on the screened shell-pair set."""
+        self.one_e_mats = {}
+        self.eri_sparse = {}
+        self.shell_pair_ove_max = None
+        self.shell_pair_eri_max = None
+        self.eri_screen_min = 0.0
+        self.pairs_sorted = None
+        self.pair_pos = None
 
     def fill_screened_overlap_pairs(self):
 
         ao, basis = self.ao, self.basis
+        self.shell_pairs = {}
+        self._invalidate_after_overlap_change()
         pair_max = ao.zeros((basis.nsh, basis.nsh))
 
         for sii, sji in ndindex_unique(basis.nsh, 2):
             sij = basis.shells[sii] * basis.shells[sji]
-            if ao.sum(ao.square(sij.si.cen - sij.sj.cen)).item() == 0: # same center
-                self.shell_pairs[(sii,sji)] = sij
-                pair_max[sii,sji] = pair_max[sji,sii] = ao.arr(1.0)
+            if (
+                ao.sum(ao.square(sij.si.cen - sij.sj.cen)).item() == 0
+            ):  # same center
+                self.shell_pairs[(sii, sji)] = sij
+                pair_max[sii, sji] = pair_max[sji, sii] = ao.arr(1.0)
                 continue
 
             ove_prims = sij.bfs.calc_overlap()
             coeffs = sij.bfs.ga.coeffs, sij.bfs.gb.coeffs
             prim_lens = sij.si.npf, sij.sj.npf
-            ove = self._contract_strides_2d(ove_prims, prim_lens, coeffs=coeffs, ao=ao)
+            ove = self._contract_strides_2d(
+                ove_prims, prim_lens, coeffs=coeffs, ao=ao
+            )
             ove_max = ao.abs(ove).max()
             if ove_max > self.overlap_tol:
-                self.shell_pairs[(sii,sji)] = sij
-                pair_max[sii,sji] = pair_max[sji,sii] = ove_max
+                self.shell_pairs[(sii, sji)] = sij
+                pair_max[sii, sji] = pair_max[sji, sii] = ove_max
 
         self.shell_pair_ove_max = pair_max
-    #end def build_screened_overlap_pairs(self):
 
+    # end def build_screened_overlap_pairs(self):
 
     def fill_screened_eri_pairs(self):
         ao, basis = self.ao, self.basis
         pair_max = ao.zeros((basis.nsh, basis.nsh))
 
-        if len(self.shell_pairs) > 0: # only iterate the screened pairs
+        if len(self.shell_pairs) > 0:  # only iterate the screened pairs
             for ids, sij in self.shell_pairs.items():
                 bf_vals = sij | sij
                 max_val = ao.abs(bf_vals).max()
-                pair_max[ids[0],ids[1]] = max_val
-                pair_max[ids[1],ids[0]] = max_val
+                pair_max[ids[0], ids[1]] = max_val
+                pair_max[ids[1], ids[0]] = max_val
 
                 del bf_vals
 
-        else: # iterate all pairs
+        else:  # iterate all pairs
             raise NotImplementedError("@TODO feature")
 
         self.shell_pair_eri_max = pair_max
         self.eri_screen_min = pair_max[pair_max > 0].min().item()
+        self.pairs_sorted = None
+        self.pair_pos = None
 
+    def _ensure_pair_order(self):
+        if self.pair_order is None:
+            self.pair_order = {
+                ids: idx
+                for idx, ids in enumerate(ndindex_unique(self.basis.nsh, 2))
+            }
+        return self.pair_order
+
+    def _prepare_screen_state(self):
+        """Ensure screened ERI state is computed and cached."""
+        if len(self.shell_pairs) == 0:
+            self.fill_screened_overlap_pairs()
+        if self.shell_pair_eri_max is None:
+            self.fill_screened_eri_pairs()
+
+        if self.pairs_sorted is None or self.pair_pos is None:
+            self.pairs_sorted = sorted(
+                list(self.shell_pairs.items()),
+                key=lambda x: self.shell_pair_eri_max[x[0]],
+                reverse=True,
+            )
+            self.pair_pos = {
+                pair_ids: ii for ii, (pair_ids, _) in enumerate(self.pairs_sorted)
+            }
+
+        return self.pairs_sorted, self.pair_pos
 
     def build_one_electron_matrices(self):
         ao, basis, nbf = self.ao, self.basis, self.basis.nbf
@@ -114,98 +184,125 @@ class IntegralEngine():
         else:
             raise NotImplementedError("No logic for no atoms")
 
-        if len(self.shell_pairs) > 0: # only iterate the screened pairs
+        if len(self.shell_pairs) > 0:  # only iterate the screened pairs
 
             for ids, sij in self.shell_pairs.items():
                 coeffs = sij.bfs.ga.coeffs, sij.bfs.gb.coeffs
                 prim_lens = sij.si.npf, sij.sj.npf
                 bf_ids = basis.shell_range[ids[0]], basis.shell_range[ids[1]]
-                bf_rid = bf_ids[1], bf_ids[0] # reveresed ids
+                bf_rid = bf_ids[1], bf_ids[0]  # reveresed ids
 
                 prim_vals = sij.bfs.calc_overlap()
-                bf_vals = self._contract_strides_2d(prim_vals, prim_lens, coeffs=coeffs, ao=ao)
+                bf_vals = self._contract_strides_2d(
+                    prim_vals, prim_lens, coeffs=coeffs, ao=ao
+                )
                 del prim_vals
                 s_mat[bf_ids] = bf_vals
                 s_mat[bf_rid] = bf_vals.T
 
-
                 prim_vals = sij.bfs.calc_kinetic()
-                bf_vals = self._contract_strides_2d(prim_vals, prim_lens, coeffs=coeffs, ao=ao)
+                bf_vals = self._contract_strides_2d(
+                    prim_vals, prim_lens, coeffs=coeffs, ao=ao
+                )
                 del prim_vals
                 t_mat[bf_ids] = bf_vals
                 t_mat[bf_rid] = bf_vals.T
 
                 prim_vals = sij.bfs.calc_nai(rcen)
                 prim_vals = ao.einsum("ijc,c->ij", prim_vals, charges)
-                bf_vals = self._contract_strides_2d(prim_vals, prim_lens, coeffs=coeffs, ao=ao)
+                bf_vals = self._contract_strides_2d(
+                    prim_vals, prim_lens, coeffs=coeffs, ao=ao
+                )
                 del prim_vals
                 v_mat[bf_ids] = bf_vals
                 v_mat[bf_rid] = bf_vals.T
 
-        else: # iterate all pairs
+        else:  # iterate all pairs
             raise NotImplementedError("@TODO feature")
             # for sii, sji in ndindex((basis.nsh, basis.nsh)):
 
+        self.one_e_mats['S'] = s_mat
+        self.one_e_mats['T'] = t_mat
+        self.one_e_mats['V'] = v_mat
         return s_mat, t_mat, v_mat
-    #end def build_one_electron_matrices(self):
 
+    # end def build_one_electron_matrices(self):
 
     def build_eri_sparse(self):
         """build a dict of pairs of pairs that holds the ERIs"""
-        ao = self.ao
-        if self.shell_pair_eri_max is None:
-            self.fill_screened_eri_pairs()
-
         eri_dict = {}
-        pairs_list = list(self.shell_pairs.items())
-        pair_max = self.shell_pair_eri_max
-        pairs_sorted = sorted(pairs_list, key=lambda x: pair_max[x[0]], reverse=True)
-        single_tol = self.eri_screen_tol / self.eri_screen_min
-
-        for ii, (ids, sij) in enumerate(pairs_sorted):
-            ibound = self.shell_pair_eri_max[ids]
-            if ibound < single_tol:
-                break
-
-            ktol = self.eri_screen_tol / ibound
-            for kk in range(ii, len(pairs_sorted)):
-                kds, skl = pairs_sorted[kk]
-                kbound = pair_max[kds]
-                if kbound < ktol:
-                    break
-
+        screen = self._eri_screen_setup()
+        for ids, sij in screen.pairs_sorted:
+            for kds, skl in self._iter_screened_k_pairs(
+                ids, screen, only_triu=True
+            ):
                 if self.pair_order[ids] >= self.pair_order[kds]:
-                    eri_dict[ids+kds] = sij | skl
+                    eri_dict[ids + kds] = sij | skl
                 else:
-                    eri_dict[kds+ids] = skl | sij
+                    eri_dict[kds + ids] = skl | sij
 
+        self.eri_sparse = eri_dict
         return eri_dict
 
+    def _eri_screen_setup(self):
+        """Build shared data needed for screened ERI pair loops."""
+        self._ensure_pair_order()
+        pairs_sorted, pair_pos = self._prepare_screen_state()
+        return EriScreenContext(
+            pair_max=self.shell_pair_eri_max,
+            pairs_sorted=pairs_sorted,
+            pair_pos=pair_pos,
+            single_tol=self.eri_screen_tol / self.eri_screen_min,
+        )
+
+    def _iter_screened_k_pairs(self, ids, screen, only_triu):
+        """Yield screened k-pairs for a fixed i-pair using the sparse ERI rules."""
+        if ids not in screen.pair_pos:
+            return
+
+        ibound = screen.pair_max[ids]
+        if ibound < screen.single_tol:
+            return
+
+        start = screen.pair_pos[ids] if only_triu else 0
+        ktol = self.eri_screen_tol / ibound
+        for kk in range(start, len(screen.pairs_sorted)):
+            kds, skl = screen.pairs_sorted[kk]
+            if screen.pair_max[kds] < ktol:
+                break
+            yield kds, skl
 
     def build_eri_4d(self, eri_dict=None):
         if eri_dict is None:
-            eri_dict = self.build_eri_sparse()
+            if len(self.eri_sparse) > 0:
+                eri_dict = self.eri_sparse
+            else:
+                eri_dict = self.build_eri_sparse()
 
         ranges = self.basis.shell_range
-        eri4d = self.ao.zeros((self.basis.nbf,)*4)
+        eri4d = self.ao.zeros((self.basis.nbf,) * 4)
 
         pair_list = list(ndindex_unique(self.basis.nsh, 2))
         for p, ids in enumerate(pair_list):
             for q in range(p + 1):
                 kds = pair_list[q]
-                block = eri_dict[ids+kds]
-                rngs = ranges[ids[0]], ranges[ids[1]], ranges[kds[0]], ranges[kds[1]]
+                block = eri_dict[ids + kds]
+                rngs = (
+                    ranges[ids[0]],
+                    ranges[ids[1]],
+                    ranges[kds[0]],
+                    ranges[kds[1]],
+                )
                 self._fill_eri_symm(eri4d, rngs, block, self.ao)
 
         return eri4d
 
-
-    def build_eri_4d_ref(self, eri_dict=None):
+    def build_eri_4d_ref(self):
         """build in full loop form for error-checking"""
         # still exploit 4-fold symmetry though
         nbf = self.basis.nbf
         bfs = self.basis.to_prims()
-        eri4d = self.ao.zeros((self.basis.nbf,)*4)
+        eri4d = self.ao.zeros((self.basis.nbf,) * 4)
         for ii in range(nbf):
             gi = bfs[ii]
             for jj in range(ii, nbf):
@@ -220,10 +317,10 @@ class IntegralEngine():
                         cijkl = cij + (gk.coeffs, gl.coeffs)
                         prim_vals = gij | gkl
                         val = self.ao.einsum('ijkl,i,j,k,l', prim_vals, *cijkl)
-                        eri4d[ii,jj,kk,ll] = val
-                        eri4d[jj,ii,kk,ll] = val
-                        eri4d[ii,jj,ll,kk] = val
-                        eri4d[jj,ii,ll,kk] = val
+                        eri4d[ii, jj, kk, ll] = val
+                        eri4d[jj, ii, kk, ll] = val
+                        eri4d[ii, jj, ll, kk] = val
+                        eri4d[jj, ii, ll, kk] = val
 
         return eri4d
 
@@ -232,43 +329,55 @@ class IntegralEngine():
         """4d strided contraction with optional coefficients"""
         ao = ao or arr.get_default_ops()
         assert isinstance(prim_vals, ao.ArrayType), "prim_vals must be ArrayType"
-        assert all([s%a == 0 for s,a in zip(prim_vals.shape, axis_strides)]), \
-            "axis_strides must divide eris.shape"
-        angm_lens = [s//a for s,a in zip(prim_vals.shape, axis_strides)]
+        assert all(
+            [s % a == 0 for s, a in zip(prim_vals.shape, axis_strides)]
+        ), "axis_strides must divide eris.shape"
+        angm_lens = [s // a for s, a in zip(prim_vals.shape, axis_strides)]
         new_shape = sum(list(zip(angm_lens, axis_strides)), ())
         vals_tmp = prim_vals.reshape(new_shape)
         if coeffs is None:
-            vals_cont = ao.sum(vals_tmp, axis=(1,3,5,7))
+            vals_cont = ao.sum(vals_tmp, axis=(1, 3, 5, 7))
         else:
-            assert all([len(c) == es for c, es in zip(coeffs, prim_vals.shape)]), \
-                "prim_vals + coeffs shape mismatch"
-            coeffs  = [c.reshape(-1, pl) for c,pl in zip(coeffs, axis_strides)]
-            vals_cont = ao.einsum('iajbkcld,ia,jb,kc,ld->ijkl', vals_tmp,
-                            coeffs[0], coeffs[1], coeffs[2], coeffs[3])
+            assert all(
+                [len(c) == es for c, es in zip(coeffs, prim_vals.shape)]
+            ), "prim_vals + coeffs shape mismatch"
+            coeffs = [c.reshape(-1, pl) for c, pl in zip(coeffs, axis_strides)]
+            vals_cont = ao.einsum(
+                'iajbkcld,ia,jb,kc,ld->ijkl',
+                vals_tmp,
+                coeffs[0],
+                coeffs[1],
+                coeffs[2],
+                coeffs[3],
+            )
         return vals_cont
-    # end def eri_contraction_pure(eris, axis_strides, coeffs, ao=None):
 
+    # end def eri_contraction_pure(eris, axis_strides, coeffs, ao=None):
 
     @staticmethod
     def _contract_strides_2d(prim_vals, axis_strides, coeffs=None, ao=None):
         """2d strided contraction with optional coefficients"""
         ao = ao or arr.get_default_ops()
         assert isinstance(prim_vals, ao.ArrayType), "prim_vals must be ArrayType"
-        assert all([s%a == 0 for s,a in zip(prim_vals.shape, axis_strides)]), \
-            "axis_strides must divide eris.shape"
-        angm_lens = [s//a for s,a in zip(prim_vals.shape, axis_strides)]
+        assert all(
+            [s % a == 0 for s, a in zip(prim_vals.shape, axis_strides)]
+        ), "axis_strides must divide eris.shape"
+        angm_lens = [s // a for s, a in zip(prim_vals.shape, axis_strides)]
         new_shape = sum(list(zip(angm_lens, axis_strides)), ())
         vals_tmp = prim_vals.reshape(new_shape)
         if coeffs is None:
-            vals_cont = ao.sum(vals_tmp, axis=(1,3,))
+            vals_cont = ao.sum(vals_tmp, axis=(1, 3))
         else:
-            assert all([len(c) == es for c, es in zip(coeffs, prim_vals.shape)]), \
-                "prim_vals + coeffs shape mismatch"
-            coeffs  = [c.reshape(-1, pl) for c,pl in zip(coeffs, axis_strides)]
-            vals_cont = ao.einsum('iajb,ia,jb->ij', vals_tmp, coeffs[0], coeffs[1])
+            assert all(
+                [len(c) == es for c, es in zip(coeffs, prim_vals.shape)]
+            ), "prim_vals + coeffs shape mismatch"
+            coeffs = [c.reshape(-1, pl) for c, pl in zip(coeffs, axis_strides)]
+            vals_cont = ao.einsum(
+                'iajb,ia,jb->ij', vals_tmp, coeffs[0], coeffs[1]
+            )
         return vals_cont
-    # end def eri_contraction_pure(eris, axis_strides, coeffs, ao=None):
 
+    # end def eri_contraction_pure(eris, axis_strides, coeffs, ao=None):
 
     @staticmethod
     def _contract(x, axis_counts, coeffs=None, ao=None):
@@ -286,22 +395,25 @@ class IntegralEngine():
             assert len(coeffs) == x.ndim
         for d in range(x.ndim):
             assert sum(axis_counts[d]) == x.shape[d]
-            assert coeffs[d].shape[0] == x.shape[d] if coeffs is not None else True
+            assert (
+                coeffs[d].shape[0] == x.shape[d] if coeffs is not None else True
+            )
 
         dim_ratios = [(d, x.shape[d] // len(axis_counts[d])) for d in range(4)]
         dim_ratios.sort(key=lambda t: t[1], reverse=True)
 
         for dim, _ in dim_ratios:
             if coeffs is not None:
-                c = coeffs[dim]                         # (axis_len,)
+                c = coeffs[dim]  # (axis_len,)
                 shape = [1] * x.ndim
                 shape[dim] = c.shape[0]
-                x = x * c.reshape(shape)                # broadcast, no giant coeff tensor
-            if x.shape[dim] != len(axis_counts[dim]):   # no need to contract
+                x = x * c.reshape(shape)  # broadcast, no giant coeff tensor
+            if x.shape[dim] != len(axis_counts[dim]):  # no need to contract
                 x = ao.segment_sum(x, axis_counts[dim], axis=dim)
 
         return x
-    #end def _contract
+
+    # end def _contract
 
     @staticmethod
     def _fill_swap_symm(array, ids, vals, ao):
@@ -314,7 +426,6 @@ class IntegralEngine():
         id2 = (ids[1], ids[0], ids[3], ids[2])
         array[id2] = ao.transpose(vals, (1, 0, 3, 2))
 
-
     @classmethod
     def _fill_eri_symm(cls, array, ids, vals, ao):
         """fill (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk), repeat for (kl|ij)"""
@@ -323,113 +434,180 @@ class IntegralEngine():
         val2 = ao.transpose(vals, (2, 3, 0, 1))
         cls._fill_swap_symm(array, id2, val2, ao)
 
-
-    def calc_eri_batch(self, pair_id, only_triu=False):
+    def calc_eri_batch(self, pair_id, batch_size=3, only_triu=False):
         ids = pair_id
-        if ids not in self.shell_pairs:
-            return {}
-
-        ibound = self.shell_pair_eri_max[ids]
-        if ibound < (self.eri_screen_tol / self.eri_screen_min):
+        screen = self._eri_screen_setup()
+        if ids not in screen.pair_pos:
             return {}
 
         sij = self.shell_pairs[ids]
-        pairs_list = list(self.shell_pairs.items())
-        pair_max = self.shell_pair_eri_max
-        pairs_sorted = sorted(pairs_list, key=lambda x: pair_max[x[0]], reverse=True)
-        sorted_pos = {pair_ids: i for i, (pair_ids, _) in enumerate(pairs_sorted)}
-        ii = sorted_pos[ids] if only_triu else 0
+        kds_list = [
+            kds
+            for kds, _ in self._iter_screened_k_pairs(
+                ids, screen, only_triu=only_triu
+            )
+        ]
 
-        # skl_list = []
-        kds_list = []
-        ktol = self.eri_screen_tol / ibound
-        for kk in range(ii, len(pairs_sorted)):
-            kds, skl = pairs_sorted[kk]
-            kbound = pair_max[kds]
-            if kbound < ktol:
-                break
-
-            # skl_list.append(skl)
-            kds_list.append(kds)
-
-        debug_var = 1
         kds_sort = sorted(kds_list)
-        batch_size = 3
         ret = {}
-        batch_count = len(kds_sort) // batch_size
-        if len(kds_sort) % batch_size != 0: batch_count += 1
-
+        batch_count = (len(kds_sort) + batch_size - 1) // batch_size
         for ibatch in range(batch_count):
-            ks = slice(ibatch*batch_size, (ibatch+1)*batch_size)
+            # @TODO: need smarter batching that optimizes common ks and
+            # minimizes uneccessary cross terms
+            ks = slice(ibatch * batch_size, (ibatch + 1) * batch_size)
             kds = kds_sort[ks]
             ks = list(set(kl[0] for kl in kds))
             ls = list(set(kl[1] for kl in kds))
             gk = CartShellBatch([self.basis.shells[k] for k in ks])
             gl = CartShellBatch([self.basis.shells[k] for k in ls])
             skl = CartShellPair(gk, gl)
-            eris = sij | skl # batched calculation
+            eris = sij | skl  # batched calculation
 
-            cnt = 0
-            kszs = [cnt := cnt+sh.nbf for sh in gk.shells] # cumsum
-            cnt = 0
-            lszs = [cnt := cnt+sh.nbf for sh in gl.shells]
+            k_hi = list(itertools.accumulate(sh.nbf for sh in gk.shells))
+            l_hi = list(itertools.accumulate(sh.nbf for sh in gl.shells))
+            k_lo = [0] + k_hi[:-1]
+            l_lo = [0] + l_hi[:-1]
+            k_bounds = {k: (lo, hi) for k, lo, hi in zip(ks, k_lo, k_hi)}
+            l_bounds = {l: (lo, hi) for l, lo, hi in zip(ls, l_lo, l_hi)}
 
-            kmap = {k:i for i,k in enumerate(ks)}
-            lmap = {k:i for i,k in enumerate(ls)}
-            for k,l in kds:
-                ek, el = kmap[k], lmap[l]
-                klo = 0 if ek == 0 else kszs[ek-1]
-                khi = kszs[ek] if ek < len(kszs) else None
-                llo = 0 if el == 0 else lszs[el-1]
-                lhi = lszs[el] if el < len(lszs) else None
-                if self.pair_order[ids] >= self.pair_order[(k,l)]:
-                    ret[ids+(k,l)] = eris[:,:,klo:khi,llo:lhi]
+            for k, l in kds:
+                klo, khi = k_bounds[k]
+                llo, lhi = l_bounds[l]
+                block = eris[:, :, klo:khi, llo:lhi]
+                if self.pair_order[ids] >= self.pair_order[(k, l)]:
+                    ret[ids + (k, l)] = block
                 else:
-                    ret[(k,l)+ids] = self.ao.transpose(
-                        eris[:,:,klo:khi,llo:lhi],
-                        (2,3,0,1))
+                    ret[(k, l) + ids] = self.ao.transpose(block, (2, 3, 0, 1))
 
-            debug_var = 1
         return ret
-        # what we need to do instead is batch over the l dim, which we can do
-        # with the existing machinery and not compute extra terms. We can
-        # also batch k and l at once and go ahead and compute the missing
-        # cross terms, which is fine, or fill them in with zeros so we don't
-        # actually compute that pair from scratch.
-        # we still need to do an efficient __add__ implementation for ShellPair
-        # or CartPair where it concats the hab terms instead of recomputing.
-        # We can add the machinery there to fill in missing cross terms
-        # with the computed hab or zeros
 
-        # skl = sum(skl_list) # @TODO, handle sum and ERI over ragged strides
-        # bfk_list = [skl.si.bfs for skl in skl_list]
-        # bfl_list = [skl.sj.bfs for skl in skl_list]
-        # gk = CartShellBatch([skl.si for skl in skl_list])
-        # gl = CartShellBatch([skl.sj for skl in skl_list])
-        # skl = CartShellPair(gk, gl)
-        # ret = sij | skl
-        # return ret
+    # end def calc_eri_batch()
+
+    def _iter_eri_kds_batches(self, kds_list, batch_size=4):
+        """Yield (kds, kids, lids) for each batch.
+
+        Groups by k to maximize same-k batching while avoiding overlaps.
+        kids is a 1D AO-basis index array. lids is either a slice if
+        contiguous or a 1D index array otherwise.
+        """
+        if batch_size is not None and batch_size <= 0:
+            batch_size = None
+
+        # Group kds by k while preserving first-seen order.
+        k_order = []
+        k_to_ls = {}
+        for k, l in kds_list:
+            if k not in k_to_ls:
+                k_to_ls[k] = []
+                k_order.append(k)
+            k_to_ls[k].append(l)
+
+        ranges = self.basis.shell_range
+        ao = self.ao
+        for k in k_order:
+            ls_full = k_to_ls[k]
+            if batch_size is None:
+                l_batches = [ls_full]
+            else:
+                l_batches = [
+                    ls_full[ii : ii + batch_size]
+                    for ii in range(0, len(ls_full), batch_size)
+                ]
+
+            for ls in l_batches:
+                if not ls:
+                    continue
+                kds = [(k, l) for l in ls]
+                kids = ao.arange(ranges[k].start, ranges[k].stop)
+                l_ranges = [ranges[l] for l in ls]
+                is_contig = all(
+                    l_ranges[ii].stop == l_ranges[ii + 1].start
+                    for ii in range(len(l_ranges) - 1)
+                )
+                if is_contig:
+                    lids = slice(l_ranges[0].start, l_ranges[-1].stop)
+                else:
+                    lids = ao.concat(
+                        [
+                            ao.arange(r.start, r.stop)
+                            for r in l_ranges
+                        ]
+                    )
+                yield kds, kids, lids
+
+    def calc_eri_batch_block(self, pair_id, batch_size=4):
+        """Yield batched ERI blocks for a fixed (i,j) pair.
+
+        Batches are grouped to keep as many pairs with the same k index
+        together as possible. This avoids returning overlapping (k,l)
+        sections across batches.
+
+        Each yielded item is:
+            (kds, eris, k_bounds, l_bounds)
+        where:
+            kds      = list of (k,l) shell pairs included in this batch
+            eris     = 4D array with shape (ni, nj, sum_nbk, sum_nbl) in (ij|kl) order
+            k_bounds = dict {k: (lo, hi)} indices into the third axis of eris
+            l_bounds = dict {l: (lo, hi)} indices into the fourth axis of eris
+        """
+        ids = pair_id
+        screen = self._eri_screen_setup()
+        if ids not in screen.pair_pos:
+            return
+
+        sij = self.shell_pairs[ids]
+        kds_list = [
+            kds
+            for kds, _ in self._iter_screened_k_pairs(
+                ids, screen, only_triu=False
+            )
+        ]
+        for kds, _kids, _lids in self._iter_eri_kds_batches(
+            kds_list, batch_size=batch_size
+        ):
+            ks = list(dict.fromkeys(kl[0] for kl in kds))
+            ls = list(dict.fromkeys(kl[1] for kl in kds))
+            gk = CartShellBatch([self.basis.shells[k] for k in ks])
+            gl = CartShellBatch([self.basis.shells[l] for l in ls])
+            skl = CartShellPair(gk, gl)
+            eris = sij | skl  # batched calculation in (ij|kl) order
+
+            k_hi = list(itertools.accumulate(sh.nbf for sh in gk.shells)) # cumsum
+            l_hi = list(itertools.accumulate(sh.nbf for sh in gl.shells))
+            k_lo = [0] + k_hi[:-1]
+            l_lo = [0] + l_hi[:-1]
+            k_bounds = {
+                k: (lo, hi) for k, lo, hi in zip(ks, k_lo, k_hi)
+            }
+            l_bounds = {
+                l: (lo, hi) for l, lo, hi in zip(ls, l_lo, l_hi)
+            }
+
+            yield kds, eris, k_bounds, l_bounds
+
+    # end def calc_eri_batch_block()
 
 
-#end class IntegralEngine():
+# end class IntegralEngine():
 
 
-
-    
 if __name__ == "__main__":
     import os, time
     import numpy as np
+    from pyquante22.atoms.molecule import Molecule
+
     np.set_printoptions(precision=1, suppress=False, linewidth=200)
 
     def nsymm(n):
-        return n * (n+1) // 2
+        return n * (n + 1) // 2
+
     def nsymm8(n):
         return nsymm(nsymm(n))
+
     def five_number_summary(data):
-        """ Compute min, 25th percentile, median, 75th percentile, max """
+        """Compute min, 25th percentile, median, 75th percentile, max"""
         q75, q50, q25 = np.percentile(data, [75, 50, 25])
         return np.stack([np.amin(data), q25, q50, q75, np.amax(data)])
-
 
     aoi = arr.ArrayOps(
         "torch", device="cpu", default_dtype="float64", int_dtype="int64"
@@ -442,20 +620,27 @@ if __name__ == "__main__":
     print(f"Using molecule: {str(m1)}")
     b1 = BasisSet(m1, name='sto-3g')
     # b1 = BasisSet(m1, name='aug-cc-pvqz')
-    print(f"with basis: {str(b1)} full J is {b1.nbf**4}, uniqs is {nsymm8(b1.nbf)}")
+    print(
+        f"with basis: {str(b1)} full J is {b1.nbf**4}, uniqs is {nsymm8(b1.nbf)}"
+    )
 
-    s_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('S')] 
-    p_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('P')] 
-    d_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('D')] 
-    f_ids = [i for i,s in enumerate(b1.shells) if str(s).startswith('F')] 
+    s_ids = [i for i, s in enumerate(b1.shells) if str(s).startswith('S')]
+    p_ids = [i for i, s in enumerate(b1.shells) if str(s).startswith('P')]
+    d_ids = [i for i, s in enumerate(b1.shells) if str(s).startswith('D')]
+    f_ids = [i for i, s in enumerate(b1.shells) if str(s).startswith('F')]
 
     sii = s_ids[0]
     sji = p_ids[0] if len(p_ids) > 0 else s_ids[1]
     ski = d_ids[0] if len(d_ids) > 0 else s_ids[-2]
     sli = s_ids[-1]
-    si, sj, sk, sl = b1.shells[sii], b1.shells[sji], b1.shells[ski], b1.shells[sli]
+    si, sj, sk, sl = (
+        b1.shells[sii],
+        b1.shells[sji],
+        b1.shells[ski],
+        b1.shells[sli],
+    )
     gi, gj, gk, gl = si.bfs, sj.bfs, sk.bfs, sl.bfs
-    gij, gkl = gi*gj, gk*gl
+    gij, gkl = gi * gj, gk * gl
 
     t0 = time.perf_counter()
     ie1 = IntegralEngine(b1)
@@ -476,16 +661,15 @@ if __name__ == "__main__":
     t0 = time.perf_counter()
     pair_max = aoi.zeros((b1.nsh, b1.nsh))
     for sii, sji in ndindex_unique(b1.nsh, 2):
-        sij = ie1.shell_pairs.get((sii,sji), b1.shells[sii]*b1.shells[sji])
+        sij = ie1.shell_pairs.get((sii, sji), b1.shells[sii] * b1.shells[sji])
         bf_vals = sij | sij
         max_val = aoi.abs(bf_vals).max()
-        pair_max[sii,sji] = max_val
-        pair_max[sji,sii] = max_val
+        pair_max[sii, sji] = max_val
+        pair_max[sji, sii] = max_val
         del bf_vals
     t1 = time.perf_counter()
     print(f"Time to do full eri screen pairs: {t1-t0:.2f}s")
     assert aoi.abs(pair_max - ie1.shell_pair_eri_max).max() < ie1.eri_screen_tol
-
 
     t0 = time.perf_counter()
     eri_dict = ie1.build_eri_sparse()
@@ -520,7 +704,9 @@ if __name__ == "__main__":
         diffs = eri4d - eri_ref
         mask = aoi.abs(eri_ref) > 0
         perrs = diffs[mask] / eri_ref[mask]
-        assert aoi.abs(perrs).max().item() < 5e-15, f"mismatch in sparse eri building"
+        assert (
+            aoi.abs(perrs).max().item() < 5e-15
+        ), f"mismatch in sparse eri building"
 
     # cg0 = b1.bfs[0]
     bfs = b1.to_prims()
@@ -538,7 +724,9 @@ if __name__ == "__main__":
     eri0010 = cp00 | cp01
     eri0005 = cp00 | cp05
 
-    #@TODO: batch ERIs 
+    # @TODO: batch screening and one elec ints
+
+    # @TODO: batch ERIs
     # ver1: good for direct_sum scf style
     #   so it will compute the (ij|kl) for a fixed (ij| and concat all the relevant |kl)
     #   sub-step: need to support adding Pairs so it doesn't recompute hab
@@ -549,8 +737,8 @@ if __name__ == "__main__":
 
     # cleanups: change the basis.bfs and basis.to_prims() naming convention, it's backwards
     # NB: we're getting to the point where we're using syntactic sugar and calling
-    # high level functions, if the AI can't code it correctly that's a point against us. 
-    # it should start obeying the KISS principle now, and if the AI can't code the solution 
+    # high level functions, if the AI can't code it correctly that's a point against us.
+    # it should start obeying the KISS principle now, and if the AI can't code the solution
     # we're definitely not KISS
 
     # tmp = ie1.calc_eri_batch((2,3))
@@ -561,14 +749,17 @@ if __name__ == "__main__":
     t1 = time.perf_counter()
     print(f"Time to batch build sparse eri dict: {t1-t0:.2f}s")
 
-    assert set(eri_dict.keys()) == set(eri_dict2.keys()), "calc_eri_batch(only_triu) make different quartets"
+    assert set(eri_dict.keys()) == set(
+        eri_dict2.keys()
+    ), "calc_eri_batch(only_triu) make different quartets"
 
     eri4d2 = ie1.build_eri_4d(eri_dict2)
     diffs = eri4d2 - eri4d
     mask = aoi.abs(eri4d) > 0
     perrs = diffs[mask] / eri4d[mask]
     pmax = aoi.abs(perrs).max().item()
-    assert pmax < 1e-15, f"relative error of eri batch build and sparse build disagree max%err: {pmax:.2e}"
-
+    assert (
+        pmax < 1e-15
+    ), f"relative error of eri batch build and sparse build disagree max%err: {pmax:.2e}"
 
     debug_var = 1
