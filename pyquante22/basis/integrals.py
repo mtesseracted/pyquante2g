@@ -486,54 +486,128 @@ class IntegralEngine:
     def _iter_eri_kds_batches(self, kds_list, batch_size=4):
         """Yield (kds, kids, lids) for each batch.
 
-        Groups by k to maximize same-k batching while avoiding overlaps.
-        kids is a 1D AO-basis index array. lids is either a slice if
-        contiguous or a 1D index array otherwise.
+        Groups by k and packs multiple k blocks when the total pair
+        count stays within batch_size. kids is a 1D AO-basis index
+        array. lids is either a slice if contiguous or a 1D index
+        array otherwise.
         """
         if batch_size is not None and batch_size <= 0:
             batch_size = None
 
-        # Group kds by k while preserving first-seen order.
-        k_order = []
+        # Group kds by k, then sort k and l to favor contiguous blocks.
         k_to_ls = {}
         for k, l in kds_list:
-            if k not in k_to_ls:
-                k_to_ls[k] = []
-                k_order.append(k)
-            k_to_ls[k].append(l)
+            k_to_ls.setdefault(k, set()).add(l)
 
         ranges = self.basis.shell_range
         ao = self.ao
-        for k in k_order:
-            ls_full = k_to_ls[k]
+        blocks = []
+        for k in sorted(k_to_ls):
+            ls_full = sorted(k_to_ls[k])
             if batch_size is None:
-                l_batches = [ls_full]
+                blocks.append((k, ls_full))
             else:
-                l_batches = [
-                    ls_full[ii : ii + batch_size]
-                    for ii in range(0, len(ls_full), batch_size)
-                ]
+                for ii in range(0, len(ls_full), batch_size):
+                    ls_chunk = ls_full[ii : ii + batch_size]
+                    blocks.append((k, ls_chunk))
 
-            for ls in l_batches:
-                if not ls:
-                    continue
-                kds = [(k, l) for l in ls]
-                kids = ao.arange(ranges[k].start, ranges[k].stop)
-                l_ranges = [ranges[l] for l in ls]
-                is_contig = all(
-                    l_ranges[ii].stop == l_ranges[ii + 1].start
-                    for ii in range(len(l_ranges) - 1)
+        bb = 0
+        while bb < len(blocks):
+            cur_kds = []
+            cur_ks = set()
+            cur_ls = set()
+            cur_size = 0
+
+            while bb < len(blocks):
+                k, ls = blocks[bb]
+                add_size = len(ls)
+                if batch_size is not None and cur_size > 0 and cur_size + add_size > batch_size:
+                    break
+                cur_kds.extend((k, l) for l in ls)
+                cur_ks.add(k)
+                cur_ls.update(ls)
+                cur_size += add_size
+                bb += 1
+
+            ks = sorted(cur_ks)
+            ls = sorted(cur_ls)
+            kids = ao.concat(
+                [ao.arange(ranges[k].start, ranges[k].stop) for k in ks]
+            )
+            l_ranges = [ranges[l] for l in ls]
+            is_contig = all(
+                l_ranges[ii].stop == l_ranges[ii + 1].start
+                for ii in range(len(l_ranges) - 1)
+            )
+            if is_contig:
+                lids = slice(l_ranges[0].start, l_ranges[-1].stop)
+            else:
+                lids = ao.concat([ao.arange(r.start, r.stop)
+                    for r in l_ranges])
+            yield cur_kds, kids, lids
+
+    def _iter_kds_batches(self, kds_list, batch_size=4):
+        """Yield (kds, kids, lids) batches with non-overlapping 2D slices.
+
+        Groups by k and splits a k when its size exceeds batch_size. kids is a
+        1D AO-basis index array. lids is either a slice if contiguous or a 1D
+        index array otherwise.
+        """
+        if batch_size is not None and batch_size <= 0:
+            batch_size = None
+
+        k_to_ls = {}
+        for k, l in kds_list:
+            k_to_ls.setdefault(k, set()).add(l)
+
+        ranges = self.basis.shell_range
+        ao = self.ao
+        blocks = []
+        for k in sorted(k_to_ls):
+            ls_full = sorted(k_to_ls[k])
+            if batch_size is None or len(ls_full) <= batch_size:
+                blocks.append((k, ls_full))
+            else:
+                for ii in range(0, len(ls_full), batch_size):
+                    blocks.append((k, ls_full[ii : ii + batch_size]))
+
+        bb = 0
+        while bb < len(blocks):
+            cur_ks = set()
+            cur_ls = set()
+            cur_kds = []
+            cur_size = 0
+
+            while bb < len(blocks):
+                k, ls_k = blocks[bb]
+                add_size = len(ls_k)
+                if batch_size is not None and cur_size > 0 and cur_size + add_size > batch_size:
+                    break
+                cur_ks.add(k)
+                cur_ls.update(ls_k)
+                cur_kds.extend((k, l) for l in ls_k)
+                cur_size += add_size
+                bb += 1
+
+            kids = ao.concat(
+                [ao.arange(ranges[k].start, ranges[k].stop) for k in sorted(cur_ks)]
+            )
+            ls = sorted(cur_ls)
+            l_ranges = [ranges[l] for l in ls]
+            is_contig = all(
+                l_ranges[ii].stop == l_ranges[ii + 1].start
+                for ii in range(len(l_ranges) - 1)
+            )
+            if is_contig:
+                lids = slice(l_ranges[0].start, l_ranges[-1].stop)
+            else:
+                lids = ao.concat(
+                    [
+                        ao.arange(r.start, r.stop)
+                        for r in l_ranges
+                    ]
                 )
-                if is_contig:
-                    lids = slice(l_ranges[0].start, l_ranges[-1].stop)
-                else:
-                    lids = ao.concat(
-                        [
-                            ao.arange(r.start, r.stop)
-                            for r in l_ranges
-                        ]
-                    )
-                yield kds, kids, lids
+            yield cur_kds, kids, lids
 
     def calc_eri_batch_block(self, pair_id, batch_size=4):
         """Yield batched ERI blocks for a fixed (i,j) pair.

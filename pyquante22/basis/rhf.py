@@ -158,29 +158,57 @@ def build_jk_batch_block(density, integral_engine, batch_size=64):
     for ids in sorted(ie.shell_pairs.keys()):
         i, j = ids
         ri, rj = ranges[i], ranges[j]
+        jids = ao.arange(rj.start, rj.stop) # needed for exchange symmetry
         j_block = ao.zeros((basis.shells[i].nbf, basis.shells[j].nbf))
 
         for kds, eris, k_bounds, l_bounds in ie.calc_eri_batch_block(ids, batch_size=batch_size):
             if len(kds) == 0:
                 continue
 
-            # kids = ao.concat([ao.arange(*lims) for lims in k_bounds.values()])
-            # lids = ao.concat([ao.arange(*lims) for lims in l_bounds.values()])
-            kids = ao.concat([ao.arange(ranges[k].start, ranges[k].stop) for k in k_bounds.keys()])
-            lids = ao.concat([ao.arange(ranges[k].start, ranges[k].stop) for k in l_bounds.keys()])
+            kids = ao.concat([ao.arange(ranges[k].start, ranges[k].stop) 
+                for k in k_bounds.keys()])
+            lids = ao.concat([ao.arange(ranges[k].start, ranges[k].stop) 
+                for k in l_bounds.keys()])
 
+            # fill in J
             d_kl = density[kids[:, None], lids[None, :]]
-            j_block += ao.einsum("kl,ijkl->ij", d_kl, eris)
+            kl_block = ao.einsum("kl,ijkl->ij", d_kl, eris)
+            j_block += kl_block
 
-            # need to add the lk symm term while avoiding the l==k double-counting
-            mask = lids[:, None] != kids[None, :]
-            d_lk = density[lids[:, None], kids[None, :]] * mask
-            j_block += ao.einsum("lk,ijkl->ij", d_lk, eris)
+            d_lk = density[lids[:, None], kids[None, :]]  # add symmetry
+            mask = ao.xp.isin(lids[:,None], kids, invert=True) | \
+                ao.xp.isin(kids[None,:], lids, invert=True)
+            lk_block = ao.einsum("lk,ijkl->ij", d_lk * mask, eris)
+            j_block += lk_block
 
-            # d_jl = density[rj, lids]
-            # k_block = ao.einsum("jl,ijkl->ik", d_jl, eris)
-            # k_mat[ri, kids] += k_block
-            # need to add in a swapped symmetry, not sure which...
+            # fill in K
+            d_jl = density[rj, lids]
+            jl_block = ao.einsum("jl,ijkl->ik", d_jl, eris)
+            k_mat[ri, kids] += jl_block
+
+            # d_lj = density[lids, rj]
+            # mask = ao.xp.isin(lids[:,None], jids, invert=True) | \
+            #     ao.xp.isin(jids[None,:], lids, invert=True)
+            # lj_block = ao.einsum("lj,ijkl->ik", d_lj * mask, eris)
+            # k_mat[ri, kids] += lj_block
+
+            d_jk = density[rj, kids]
+            eri_ijlk = ao.transpose(eris, (0, 1, 3, 2))
+            mask = ao.xp.isin(lids[:,None], kids, invert=True) | \
+                ao.xp.isin(kids[None,:], lids, invert=True)
+            jk_block = ao.einsum("jk,ijlk->il", d_jk, eri_ijlk * mask)
+            k_mat[ri, lids] += jk_block
+
+            if i != j:
+                d_il = density[ri, lids]
+                eri_jikl = ao.transpose(eris, (1, 0, 2, 3))
+                il_block = ao.einsum("il,jikl->jk", d_il, eri_jikl)
+                k_mat[rj, kids] += il_block
+
+                d_ik = density[ri, kids]
+                eri_jilk = ao.transpose(eris, (1, 0, 3, 2))
+                ik_block = ao.einsum("ik,jilk->jl", d_ik, eri_jilk * mask)
+                k_mat[rj, lids] += ik_block
 
             debug_var = 1
         j_mat[ri, rj] = j_block
@@ -240,17 +268,21 @@ def scf_rhf(
             assert kpmax < 1e-14, "ktmp mismatch"
 
 
-            jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=batch_size)
-            diff = jtmp - j_mat
-            mask = j_mat > 0
-            perrs = diff[mask] / j_mat[mask]
-            jpmax = ao.abs(perrs).max()
-            diff = ktmp - k_mat
-            mask = k_mat > 0
-            perrs = diff[mask] / k_mat[mask]
-            kpmax = ao.abs(perrs).max()
-            assert jpmax < 1e-14, "jtmp mismatch"
-            assert kpmax < 1e-14, "ktmp mismatch"
+            # jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=batch_size)
+            for ii in range(2, 13):
+                jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=ii)
+                diff = jtmp - j_mat
+                mask = j_mat > 0
+                perrs = diff[mask] / j_mat[mask]
+                jpmax = ao.abs(perrs).max()
+                diff = ktmp - k_mat
+                mask = k_mat > 0
+                perrs = diff[mask] / k_mat[mask]
+                kpmax = ao.abs(perrs).max()
+                assert jpmax < 1e-12, "jtmp mismatch"
+                assert kpmax < 1e-12, "ktmp mismatch"
+                print(f"{ii} J%: {jpmax:.2e} K%: {kpmax:.2e}")
+
 
 
         # Compute a CONSISTENT energy for this same density (no extra Fock build)
@@ -364,7 +396,7 @@ if __name__ == "__main__":
         t1 = time.perf_counter()
         print(f"Time to do build sparse eri: {t1-t0:.2f}s")
 
-        scf_result = scf_rhf(ie1, batch_size=3)
+        scf_result = scf_rhf(ie1, batch_size=7)
         print(
             f"SCF converged {scf_result['converged']} "
             f"in {scf_result['iterations']} iterations, "
@@ -401,78 +433,78 @@ if __name__ == "__main__":
 
     screen = ie1._eri_screen_setup()
     kds_list = [kds for kds, _ in ie1._iter_screened_k_pairs((0,0), screen, only_triu=False)]
-    kds_iter = list(ie1._iter_eri_kds_batches(kds_list, batch_size=2))
 
-    ao_mat = aoi.ones((b1.nbf, b1.nbf))
-    sh_mat = aoi.ones((b1.nsh, b1.nsh))
+    for bs in range(2, 13):
+        # kds_iter = list(ie1._iter_eri_kds_batches(kds_list, batch_size=bs))
+        kds_iter = list(ie1._iter_kds_batches(kds_list, batch_size=bs))
 
-    for ibatch, kds_batch in enumerate(kds_iter):
-        kds, kids, lids = kds_batch
-        for k,l in kds:
-            sh_mat[k, l] *= primes[ibatch]
-        ao_mat[kids, lids] *= primes[ibatch]
-    # sh_mat[0,0] *= 5 # debug
+        ao_mat = aoi.ones((b1.nbf, b1.nbf))
+        sh_mat = aoi.ones((b1.nsh, b1.nsh))
 
-    def _to_numpy(x):
-        if hasattr(x, "detach"):
-            return x.detach().cpu().numpy()
-        if hasattr(x, "numpy"):
-            return x.numpy()
-        return np.asarray(x)
+        for ibatch, kds_batch in enumerate(kds_iter):
+            kds, kids, lids = kds_batch
+            for k,l in kds:
+                sh_mat[k, l] *= primes[ibatch]
+            ao_mat[kids, lids] *= primes[ibatch]
+        # sh_mat[0,0] *= 5 # debug
 
-    sh_np = _to_numpy(sh_mat)
-    ao_np = _to_numpy(ao_mat)
-    uniq_vals = np.unique(np.concatenate([sh_np.ravel(), ao_np.ravel()]))
-    if uniq_vals.size == 1:
-        boundaries = np.array([uniq_vals[0] - 0.5, uniq_vals[0] + 0.5])
-    else:
-        mids = (uniq_vals[:-1] + uniq_vals[1:]) / 2.0
-        first = uniq_vals[0] - (mids[0] - uniq_vals[0])
-        last = uniq_vals[-1] + (uniq_vals[-1] - mids[-1])
-        boundaries = np.concatenate([[first], mids, [last]])
+        def _to_numpy(x):
+            if hasattr(x, "detach"):
+                return x.detach().cpu().numpy()
+            if hasattr(x, "numpy"):
+                return x.numpy()
+            return np.asarray(x)
 
-    cmap = plt.get_cmap("gist_ncar", uniq_vals.size)
-    norm = colors.BoundaryNorm(boundaries, cmap.N)
-
-    fig, axes = plt.subplots(1, 2, figsize=(8, 4), constrained_layout=True)
-    im0 = axes[0].matshow(sh_np, cmap=cmap, norm=norm, interpolation="none")
-    axes[0].set_title("sh_mat")
-    im1 = axes[1].matshow(ao_np, cmap=cmap, norm=norm, interpolation="none")
-    axes[1].set_title("ao_mat")
-    cbar = fig.colorbar(im1, ax=axes, ticks=uniq_vals)
-    cbar.ax.set_yticklabels([str(v) for v in uniq_vals])
-
-    def _annotate_mat(ax, mat):
-        nrows, ncols = mat.shape
-        max_dim = max(nrows, ncols)
-        if max_dim <= 10:
-            fontsize = 8
-        elif max_dim <= 20:
-            fontsize = 6
+        sh_np = _to_numpy(sh_mat)
+        ao_np = _to_numpy(ao_mat)
+        uniq_vals = np.unique(np.concatenate([sh_np.ravel(), ao_np.ravel()]))
+        if uniq_vals.size == 1:
+            boundaries = np.array([uniq_vals[0] - 0.5, uniq_vals[0] + 0.5])
         else:
-            fontsize = 4
-        for i in range(nrows):
-            for j in range(ncols):
-                val, label = mat[i,j], ""
-                if val > 1:
-                    label = ",".join(str(primes.index(f)) for f in prime_facs(val))
+            mids = (uniq_vals[:-1] + uniq_vals[1:]) / 2.0
+            first = uniq_vals[0] - (mids[0] - uniq_vals[0])
+            last = uniq_vals[-1] + (uniq_vals[-1] - mids[-1])
+            boundaries = np.concatenate([[first], mids, [last]])
 
-                if ',' in label:
-                    ax.text(j, i, label, ha="center", va="center", color="red", 
-                        fontsize=round(1.4*fontsize),
-                        path_effects=[pe.Stroke(linewidth=2, foreground="black"), pe.Normal(),],
-                    )
-                else:
-                    ax.text(j, i, label, ha="center", va="center", fontsize=fontsize, color="black",)
+        cmap = plt.get_cmap("gist_ncar", uniq_vals.size)
+        norm = colors.BoundaryNorm(boundaries, cmap.N)
 
-    _annotate_mat(axes[0], sh_np)
-    _annotate_mat(axes[1], ao_np)
-    plt.show()
-    
+        fig, axes = plt.subplots(1, 2, figsize=(8, 4), constrained_layout=True)
+        im0 = axes[0].matshow(sh_np, cmap=cmap, norm=norm, interpolation="none")
+        axes[0].set_title("sh_mat")
+        im1 = axes[1].matshow(ao_np, cmap=cmap, norm=norm, interpolation="none")
+        axes[1].set_title("ao_mat")
+        cbar = fig.colorbar(im1, ax=axes, ticks=uniq_vals)
+        cbar.ax.set_yticklabels([str(v) for v in uniq_vals])
 
+        def _annotate_mat(ax, mat):
+            nrows, ncols = mat.shape
+            max_dim = max(nrows, ncols)
+            if max_dim <= 10:
+                fontsize = 8
+            elif max_dim <= 20:
+                fontsize = 6
+            else:
+                fontsize = 4
+            for i in range(nrows):
+                for j in range(ncols):
+                    val, label = mat[i,j], ""
+                    if val > 1:
+                        label = ",".join(str(primes.index(f)) for f in prime_facs(val))
 
+                    if ',' in label:
+                        ax.text(j, i, label, ha="center", va="center", color="red", 
+                            fontsize=round(1.4*fontsize),
+                            path_effects=[pe.Stroke(linewidth=2, foreground="black"), pe.Normal(),],
+                        )
+                    else:
+                        ax.text(j, i, label, ha="center", va="center", fontsize=fontsize, color="black",)
 
-
+        _annotate_mat(axes[0], sh_np)
+        _annotate_mat(axes[1], ao_np)
+        fig.suptitle(f"Batch size {bs} unique vals: {uniq_vals}")
+        plt.show()
+        
 
     debug_var = 1
 
