@@ -269,7 +269,7 @@ def scf_rhf(
 
 
             # jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=batch_size)
-            for ii in range(2, 13):
+            for ii in range(2, 24):
                 jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=ii)
                 diff = jtmp - j_mat
                 mask = j_mat > 0
@@ -385,7 +385,7 @@ if __name__ == "__main__":
     t1 = time.perf_counter()
     print(f"Time to do init integral engine: {t1-t0:.2f}s")
 
-    if False:
+    if True:
         t0 = time.perf_counter()
         ie1.build_one_electron_matrices()
         t1 = time.perf_counter()
@@ -434,7 +434,7 @@ if __name__ == "__main__":
     screen = ie1._eri_screen_setup()
     kds_list = [kds for kds, _ in ie1._iter_screened_k_pairs((0,0), screen, only_triu=False)]
 
-    for bs in range(2, 13):
+    for bs in range(2, 28, 4):
         # kds_iter = list(ie1._iter_eri_kds_batches(kds_list, batch_size=bs))
         kds_iter = list(ie1._iter_kds_batches(kds_list, batch_size=bs))
 

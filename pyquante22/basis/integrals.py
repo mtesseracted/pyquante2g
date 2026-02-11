@@ -546,12 +546,13 @@ class IntegralEngine:
                     for r in l_ranges])
             yield cur_kds, kids, lids
 
+
     def _iter_kds_batches(self, kds_list, batch_size=4):
         """Yield (kds, kids, lids) batches with non-overlapping 2D slices.
 
-        Groups by k and splits a k when its size exceeds batch_size. kids is a
-        1D AO-basis index array. lids is either a slice if contiguous or a 1D
-        index array otherwise.
+        Groups by k and splits a k when its L-side AO count exceeds batch_size.
+        kids is a 1D AO-basis index array. lids is either a slice if contiguous
+        or a 1D index array otherwise.
         """
         if batch_size is not None and batch_size <= 0:
             batch_size = None
@@ -562,14 +563,26 @@ class IntegralEngine:
 
         ranges = self.basis.shell_range
         ao = self.ao
+        def _ao_len(s):
+            r = ranges[s]
+            return r.stop - r.start
+
         blocks = []
         for k in sorted(k_to_ls):
             ls_full = sorted(k_to_ls[k])
-            if batch_size is None or len(ls_full) <= batch_size:
-                blocks.append((k, ls_full))
-            else:
-                for ii in range(0, len(ls_full), batch_size):
-                    blocks.append((k, ls_full[ii : ii + batch_size]))
+            cur = []
+            cur_size = 0
+            for l in ls_full:
+                l_size = _ao_len(l)
+                if cur and cur_size + l_size > batch_size:
+                    blocks.append((k, cur, cur_size))
+                    cur = [l]
+                    cur_size = l_size
+                else:
+                    cur.append(l)
+                    cur_size += l_size
+            if cur:
+                blocks.append((k, cur, cur_size))
 
         bb = 0
         while bb < len(blocks):
@@ -579,9 +592,8 @@ class IntegralEngine:
             cur_size = 0
 
             while bb < len(blocks):
-                k, ls_k = blocks[bb]
-                add_size = len(ls_k)
-                if batch_size is not None and cur_size > 0 and cur_size + add_size > batch_size:
+                k, ls_k, add_size = blocks[bb]
+                if cur_size > 0 and cur_size + add_size > batch_size:
                     break
                 cur_ks.add(k)
                 cur_ls.update(ls_k)
@@ -589,25 +601,32 @@ class IntegralEngine:
                 cur_size += add_size
                 bb += 1
 
-            kids = ao.concat(
-                [ao.arange(ranges[k].start, ranges[k].stop) for k in sorted(cur_ks)]
-            )
-            ls = sorted(cur_ls)
-            l_ranges = [ranges[l] for l in ls]
-            is_contig = all(
-                l_ranges[ii].stop == l_ranges[ii + 1].start
-                for ii in range(len(l_ranges) - 1)
-            )
-            if is_contig:
-                lids = slice(l_ranges[0].start, l_ranges[-1].stop)
-            else:
-                lids = ao.concat(
-                    [
-                        ao.arange(r.start, r.stop)
-                        for r in l_ranges
-                    ]
-                )
-            yield cur_kds, kids, lids
+            # ks = sorted(cur_ks)
+            # k_ranges = [ranges[k] for k in ks]
+            # is_k_contig = all(
+            #     k_ranges[ii].stop == k_ranges[ii + 1].start
+            #     for ii in range(len(k_ranges) - 1)
+            # )
+            # if is_k_contig:
+            #     kids = slice(k_ranges[0].start, k_ranges[-1].stop)
+            # else:
+            #     kids = ao.concat(
+            #         [ao.arange(r.start, r.stop) for r in k_ranges]
+            #     )
+            # ls = sorted(cur_ls)
+            # l_ranges = [ranges[l] for l in ls]
+            # is_contig = all(
+            #     l_ranges[ii].stop == l_ranges[ii + 1].start
+            #     for ii in range(len(l_ranges) - 1)
+            # )
+            # if is_contig:
+            #     lids = slice(l_ranges[0].start, l_ranges[-1].stop)
+            # else:
+            #     lids = ao.concat(
+            #         [ao.arange(r.start, r.stop) for r in l_ranges]
+            #     )
+            yield cur_kds #, kids, lids
+
 
     def calc_eri_batch_block(self, pair_id, batch_size=4):
         """Yield batched ERI blocks for a fixed (i,j) pair.
@@ -636,13 +655,22 @@ class IntegralEngine:
                 ids, screen, only_triu=False
             )
         ]
-        for kds, _kids, _lids in self._iter_eri_kds_batches(
+        # for kds, _kids, _lids in self._iter_kds_batches(
+        for kds in self._iter_kds_batches(
             kds_list, batch_size=batch_size
         ):
             ks = list(dict.fromkeys(kl[0] for kl in kds))
             ls = list(dict.fromkeys(kl[1] for kl in kds))
             gk = CartShellBatch([self.basis.shells[k] for k in ks])
-            gl = CartShellBatch([self.basis.shells[l] for l in ls])
+            gl = CartShellBatch([self.basis.shells[k] for k in ls])
+            # if isinstance(_kids, slice):
+            #     gk = CartShellBatch(self.basis.shells[_kids])
+            # else:
+            #     gk = CartShellBatch([self.basis.shells[k] for k in _kids])
+            # if isinstance(_lids, slice):
+            #     gl = CartShellBatch(self.basis.shells[_lids])
+            # else:
+            #     gl = CartShellBatch([self.basis.shells[l] for l in _lids])
             skl = CartShellPair(gk, gl)
             eris = sij | skl  # batched calculation in (ij|kl) order
 
