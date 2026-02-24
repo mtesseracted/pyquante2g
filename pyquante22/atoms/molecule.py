@@ -8,6 +8,31 @@ from pyquante22.utils.elements import element_symbols, element_masses, element_r
 from pyquante22.utils.file_utils import read_xyz, read_mol, read_xyz_lines
 
 
+def load_sample_molecule(sample_name, ao=None, exact_match=True):
+    from importlib import resources
+    import importlib.util
+    sample_dir = resources.files("pyquante22").joinpath("..", "samples")
+    module_path = sample_dir / "samples.py"
+    module_name = "samples.samples"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    raw_samples = module.raw_samples
+
+    sample_names = [samp.get("name", "") for samp in raw_samples]
+    id_matches = [
+        ii for ii, samp in enumerate(raw_samples)
+        if (exact_match and sample_name.lower() == samp.get("name", "").lower()) or \
+           (not exact_match and sample_name.lower() in samp.get("name", "").lower())
+    ]
+    if not id_matches:
+        names = ", ".join(sorted(sample_names))
+        raise ValueError(
+            f"No sample matching '{sample_name}'. Available: {names}"
+        )
+    return Molecule(raw_samples[id_matches[0]], ao=ao)
+
+
 class Atom():
     """ Stores position info for an atom and has wrappers for properties 
     xyz position is assumed to be in bohr

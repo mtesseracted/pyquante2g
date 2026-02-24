@@ -20,14 +20,14 @@ h2_raw = dict(
    units='Angstrom',
    name='Hydrogen',
 )
-h2o_raw = dict(
+h2o_raw = dict( 
    xyz="""\
       O   0.00000000     0.00000000     0.04851804
       H   0.75300223     0.00000000    -0.51923377
       H  -0.75300223     0.00000000    -0.51923377""",
    units='Angstrom',
    name='Water',
-)
+) # sto-3g for H2O #5(7)[21] full J is 2401, uniqs is 406
 lih_raw = dict(
    xyz="""\
       Li    0.00000000     0.00000000    -0.53999756
@@ -42,6 +42,29 @@ co_raw = dict(
    units='Angstrom',
    name="Carbon Monoxide",
 )
+co2_raw = dict(
+   xyz="""\
+   O   0.000000    0.000000   -1.160000
+   C   0.000000    0.000000    0.000000
+   O   0.000000    0.000000    1.160000""",
+   units='Angstrom',
+   name="Carbon Dioxide",
+)
+o2_raw = dict(
+   xyz="""\
+   O    0.000000    0.000000   -0.605000
+   O    0.000000    0.000000    0.605000""",
+   units='Angstrom',
+   name="Oxygen",
+)
+o3_raw = dict(
+   xyz="""\
+   O    0.000000    0.000000    0.000000
+   O    1.278000    0.000000    0.000000
+   O   -0.559000    1.150000    0.000000""",
+   units='Angstrom',
+   name="Ozone",
+) # sto-3g for O3 #9(15)[45] full J is 50625, uniqs is 7260
 ch4_raw = dict(
    xyz="""\
       C   0.00000000     0.00000000     0.00000000
@@ -51,7 +74,56 @@ ch4_raw = dict(
       H  -0.62558332    -0.62558332    -0.62558332""",
    units='Angstrom',
    name="Methane",
-)
+) # sto-3g for CH4 #7(9)[27] full J is 6561, uniqs is 1035
+c2h2_raw = dict(
+   xyz="""\
+   H    0.000000    0.000000   -2.263000
+   C    0.000000    0.000000   -1.203000
+   C    0.000000    0.000000    1.203000
+   H    0.000000    0.000000    2.263000""",
+   units='Angstrom',
+   name="Acetylene",
+) # sto-3g for C2H2 #8(12)[36] full J is 20736, uniqs is 3081
+c2h4_raw = dict( # from the MLWF paper
+   xyz="""\
+   H -1.235 0.936 0.000
+   H 1.235 -0.936 0.000
+   H 1.235 0.936 0.000
+   H -1.235 -0.936 0.000
+   C 0.660 0.000 0.000
+   C -0.660 0.000 0.000""",
+   units="Angstrom",
+   name="Ethylene",
+) # sto-3g for C2H4 #10(14)[42] full J is 38416, uniqs is 5565
+c4h4_raw = dict(
+   xyz="""\
+   C    0.6750    0.6750    0.0000
+   C   -0.6750    0.6750    0.0000
+   C   -0.6750   -0.6750    0.0000
+   C    0.6750   -0.6750    0.0000
+   H    1.4400    1.4400    0.0000
+   H   -1.4400    1.4400    0.0000
+   H   -1.4400   -1.4400    0.0000
+   H    1.4400   -1.4400    0.0000""",
+   units="Angstrom",
+   name="Cyclobutadiene",
+) # sto-3g for C4H4 #16(24)[72] full J is 331776, uniqs is 45150
+c3h8_raw = dict(
+   xyz="""\
+   C      -0.6600    0.0000    0.0000
+   C       0.6600    0.0000    0.0000
+   C       1.9800    0.0000    0.0000
+   H      -1.0200    0.0000    1.0400
+   H      -1.0200    0.9010   -0.5200
+   H      -1.0200   -0.9010   -0.5200
+   H       1.0200    0.9010    0.5200
+   H       1.0200   -0.9010    0.5200
+   H       2.3400    0.9010   -0.5200
+   H       2.3400   -0.9010   -0.5200
+   H       2.3400    0.0000    1.0400""",
+   units='Angstrom',
+   name="Propane",
+) # sto-3g for C3H8 #17(23)[69] full J is 279841, uniqs is 38226
 c6h6_raw = dict(
    xyz="""\
       C  0.98735329     0.98735329     0.00000000
@@ -68,9 +140,13 @@ c6h6_raw = dict(
       H -0.64256397     2.39808138     0.00000000""",
    units='Angstrom',
    name="Benzene",
-)
-
-raw_samples = [h_raw, h2_raw, h2o_raw, lih_raw, co_raw, ch4_raw, c6h6_raw]
+) # sto-3g for C6H6 #24(36)[108] full J is 1679616, uniqs is 222111
+    
+raw_samples = [
+   h_raw, h2_raw, lih_raw, co_raw, o2_raw, # 1-2 atoms
+   h2o_raw, co2_raw, o3_raw, # 3 atoms
+   ch4_raw, c2h2_raw, c2h4_raw, c3h8_raw, c4h4_raw, c6h6_raw, 
+]
 
 
 # oh = molecule([(8,  0.00000000,     0.00000000,    -0.08687037),

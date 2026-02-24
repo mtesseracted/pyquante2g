@@ -8,8 +8,10 @@ class CartGtoPrim:
     """Cartesian GTO Primitive (batched)
     """
 
-    def __init__(self, amom, cen, alpha, coeffs=None,
-                 nd=3, ao=None, co=None, gm=None, precompute=True):
+    def __init__(
+        self, amom, cen, alpha, coeffs=None, nd=3, ao=None, co=None, gm=None, 
+        precompute=True, norm_coeffs=True,
+    ):
         """
         :param amom: (B,nd) int, angular momentum
         :param cen: (B,nd) float, center
@@ -54,8 +56,9 @@ class CartGtoPrim:
         if precompute and self.coeffs is not None:
             assert isinstance(self.coeffs, AT), f"coeffs must be {AT} type"
             if getattr(coeffs, "ndim", 0) == 0: # scalar
-                coeffs = self.ao.arr([coeffs])
-            self.coeffs = self.coeffs * self.norm
+                self.coeffs = self.ao.arr([coeffs])
+            if norm_coeffs:
+                self.coeffs = self.coeffs * self.norm
 
 
     @staticmethod

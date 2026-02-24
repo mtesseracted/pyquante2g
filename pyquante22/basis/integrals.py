@@ -43,25 +43,24 @@ class IntegralEngine:
     """batch compute integral engine
     should work like DataLoader, you give it the 'dataset', which is a basis.
     Then you request a set of matrices and it will yield them back to you in batches
+    # NOTE: overlap_tol screening is not a rigorous bound!
     """
 
     def __init__(
         self,
         basis,
-        overlap_tol=1e-12,
-        eri_screen_tol=None,
+        overlap_tol=0.0,
+        eri_screen_tol=1e-14,
         max_mem=None,
         precompute=True,
+        batch_size=64,
     ):
         self.basis = basis
         self.ao = basis.ao
+        self.batch_size = batch_size
         self.max_mem = max_mem
         self.overlap_tol = self.ao.arr(overlap_tol)
-        self.eri_screen_tol = (
-            self.overlap_tol
-            if eri_screen_tol is None
-            else self.ao.arr(eri_screen_tol)
-        )
+        self.eri_screen_tol = self.ao.arr(eri_screen_tol)
         self.shell_pairs = (
             {}
         )  # sparse rep of shell pairs, discards non-overlapping shells
@@ -73,12 +72,15 @@ class IntegralEngine:
         self.pair_pos = None
         self.one_e_mats = {}
         self.eri_sparse = {}
+        self.kds_batches_cache = None
+        self.kds_batches_batch_size = None
         # item values are (CartShellPair, max_overlap), max_overlap is always 1 if the Pair share the same center
 
         if precompute:  # fill shell_pairs and pair-order/sorted caches
             self.fill_screened_overlap_pairs()
             self._ensure_pair_order()
             self._prepare_screen_state()
+            self._build_kds_batches_cache()
 
     # end def __init__(self, basis, overlap_tol=1e-12, max_mem=None, precompute=True):
 
@@ -91,6 +93,11 @@ class IntegralEngine:
         self.eri_screen_min = 0.0
         self.pairs_sorted = None
         self.pair_pos = None
+        self._invalidate_kds_batches_cache()
+
+    def _invalidate_kds_batches_cache(self):
+        self.kds_batches_cache = None
+        self.kds_batches_batch_size = None
 
     def fill_screened_overlap_pairs(self):
 
@@ -98,6 +105,14 @@ class IntegralEngine:
         self.shell_pairs = {}
         self._invalidate_after_overlap_change()
         pair_max = ao.zeros((basis.nsh, basis.nsh))
+
+        if self.overlap_tol <= 0.0:  # no screening, just fill all pairs
+            for sii, sji in ndindex_unique(basis.nsh, 2):
+                sij = basis.shells[sii] * basis.shells[sji]
+                self.shell_pairs[(sii, sji)] = sij
+                pair_max[sii, sji] = pair_max[sji, sii] = ao.arr(1.0)
+            self.shell_pair_ove_max = pair_max
+            return
 
         for sii, sji in ndindex_unique(basis.nsh, 2):
             sij = basis.shells[sii] * basis.shells[sji]
@@ -131,6 +146,7 @@ class IntegralEngine:
             for ids, sij in self.shell_pairs.items():
                 bf_vals = sij | sij
                 max_val = ao.abs(bf_vals).max()
+                # if max_val > self.eri_screen_tol: # might as well store it
                 pair_max[ids[0], ids[1]] = max_val
                 pair_max[ids[1], ids[0]] = max_val
 
@@ -141,8 +157,10 @@ class IntegralEngine:
 
         self.shell_pair_eri_max = pair_max
         self.eri_screen_min = pair_max[pair_max > 0].min().item()
+        self.eri_screen_max = pair_max.max().item()
         self.pairs_sorted = None
         self.pair_pos = None
+        self._invalidate_kds_batches_cache()
 
     def _ensure_pair_order(self):
         if self.pair_order is None:
@@ -170,6 +188,21 @@ class IntegralEngine:
             }
 
         return self.pairs_sorted, self.pair_pos
+
+    def _build_kds_batches_cache(self, batch_size=None):
+        if batch_size is None:
+            batch_size = self.batch_size
+        screen = self._eri_screen_setup()
+        cache = {}
+        for ids in sorted(self.shell_pairs.keys()):
+            kds_list = list(self._iter_screened_k_pairs(
+                ids, screen, only_triu=False))
+            cache[ids] = list(
+                self._iter_kds_batches(kds_list, batch_size=batch_size)
+            )
+        self.kds_batches_cache = cache
+        self.kds_batches_batch_size = batch_size
+        return cache
 
     def build_one_electron_matrices(self):
         ao, basis, nbf = self.ao, self.basis, self.basis.nbf
@@ -233,9 +266,8 @@ class IntegralEngine:
         eri_dict = {}
         screen = self._eri_screen_setup()
         for ids, sij in screen.pairs_sorted:
-            for kds, skl in self._iter_screened_k_pairs(
-                ids, screen, only_triu=True
-            ):
+            for kds in self._iter_screened_k_pairs(ids, screen, only_triu=True):
+                skl = self.shell_pairs[kds]
                 if self.pair_order[ids] >= self.pair_order[kds]:
                     eri_dict[ids + kds] = sij | skl
                 else:
@@ -252,7 +284,8 @@ class IntegralEngine:
             pair_max=self.shell_pair_eri_max,
             pairs_sorted=pairs_sorted,
             pair_pos=pair_pos,
-            single_tol=self.eri_screen_tol / self.eri_screen_min,
+            # single_tol=self.eri_screen_tol / self.eri_screen_min,
+            single_tol=self.eri_screen_tol / self.eri_screen_max,
         )
 
     def _iter_screened_k_pairs(self, ids, screen, only_triu):
@@ -270,7 +303,7 @@ class IntegralEngine:
             kds, skl = screen.pairs_sorted[kk]
             if screen.pair_max[kds] < ktol:
                 break
-            yield kds, skl
+            yield kds
 
     def build_eri_4d(self, eri_dict=None):
         if eri_dict is None:
@@ -286,7 +319,10 @@ class IntegralEngine:
         for p, ids in enumerate(pair_list):
             for q in range(p + 1):
                 kds = pair_list[q]
-                block = eri_dict[ids + kds]
+                ikds = ids + kds
+                if ikds not in eri_dict:
+                    continue
+                block = eri_dict[ikds]
                 rngs = (
                     ranges[ids[0]],
                     ranges[ids[1]],
@@ -441,12 +477,9 @@ class IntegralEngine:
             return {}
 
         sij = self.shell_pairs[ids]
-        kds_list = [
-            kds
-            for kds, _ in self._iter_screened_k_pairs(
-                ids, screen, only_triu=only_triu
-            )
-        ]
+        kds_list = list(self._iter_screened_k_pairs(
+            ids, screen, only_triu=only_triu
+        ))
 
         kds_sort = sorted(kds_list)
         ret = {}
@@ -570,19 +603,23 @@ class IntegralEngine:
         blocks = []
         for k in sorted(k_to_ls):
             ls_full = sorted(k_to_ls[k])
-            cur = []
-            cur_size = 0
-            for l in ls_full:
-                l_size = _ao_len(l)
-                if cur and cur_size + l_size > batch_size:
+            if batch_size is None:
+                size = sum(_ao_len(l) for l in ls_full)
+                blocks.append((k, ls_full, size))
+            else:
+                cur = []
+                cur_size = 0
+                for l in ls_full:
+                    l_size = _ao_len(l)
+                    if cur and cur_size + l_size > batch_size:
+                        blocks.append((k, cur, cur_size))
+                        cur = [l]
+                        cur_size = l_size
+                    else:
+                        cur.append(l)
+                        cur_size += l_size
+                if cur:
                     blocks.append((k, cur, cur_size))
-                    cur = [l]
-                    cur_size = l_size
-                else:
-                    cur.append(l)
-                    cur_size += l_size
-            if cur:
-                blocks.append((k, cur, cur_size))
 
         bb = 0
         while bb < len(blocks):
@@ -593,7 +630,7 @@ class IntegralEngine:
 
             while bb < len(blocks):
                 k, ls_k, add_size = blocks[bb]
-                if cur_size > 0 and cur_size + add_size > batch_size:
+                if batch_size is not None and cur_size > 0 and cur_size + add_size > batch_size:
                     break
                 cur_ks.add(k)
                 cur_ls.update(ls_k)
@@ -601,34 +638,30 @@ class IntegralEngine:
                 cur_size += add_size
                 bb += 1
 
-            # ks = sorted(cur_ks)
-            # k_ranges = [ranges[k] for k in ks]
-            # is_k_contig = all(
-            #     k_ranges[ii].stop == k_ranges[ii + 1].start
-            #     for ii in range(len(k_ranges) - 1)
-            # )
-            # if is_k_contig:
-            #     kids = slice(k_ranges[0].start, k_ranges[-1].stop)
-            # else:
-            #     kids = ao.concat(
-            #         [ao.arange(r.start, r.stop) for r in k_ranges]
-            #     )
-            # ls = sorted(cur_ls)
-            # l_ranges = [ranges[l] for l in ls]
-            # is_contig = all(
-            #     l_ranges[ii].stop == l_ranges[ii + 1].start
-            #     for ii in range(len(l_ranges) - 1)
-            # )
-            # if is_contig:
-            #     lids = slice(l_ranges[0].start, l_ranges[-1].stop)
-            # else:
-            #     lids = ao.concat(
-            #         [ao.arange(r.start, r.stop) for r in l_ranges]
-            #     )
-            yield cur_kds #, kids, lids
+            ks = sorted(cur_ks)
+            k_ranges = [ranges[k] for k in ks]
+            is_k_contig = all(
+                k_ranges[ii].stop == k_ranges[ii + 1].start
+                for ii in range(len(k_ranges) - 1)
+            )
+            if is_k_contig:
+                kids = slice(k_ranges[0].start, k_ranges[-1].stop)
+            else:
+                kids = ao.concat([ao.arange(r.start, r.stop) for r in k_ranges])
+            ls = sorted(cur_ls)
+            l_ranges = [ranges[l] for l in ls]
+            is_contig = all(
+                l_ranges[ii].stop == l_ranges[ii + 1].start
+                for ii in range(len(l_ranges) - 1)
+            )
+            if is_contig:
+                lids = slice(l_ranges[0].start, l_ranges[-1].stop)
+            else:
+                lids = ao.concat([ao.arange(r.start, r.stop) for r in l_ranges])
+            yield cur_kds, kids, lids
 
 
-    def calc_eri_batch_block(self, pair_id, batch_size=4):
+    def calc_eri_batch_block(self, pair_id, batch_size=None):
         """Yield batched ERI blocks for a fixed (i,j) pair.
 
         Batches are grouped to keep as many pairs with the same k index
@@ -636,12 +669,13 @@ class IntegralEngine:
         sections across batches.
 
         Each yielded item is:
-            (kds, eris, k_bounds, l_bounds)
+            (kds, eris, k_bounds, l_bounds, kids, lids)
         where:
             kds      = list of (k,l) shell pairs included in this batch
             eris     = 4D array with shape (ni, nj, sum_nbk, sum_nbl) in (ij|kl) order
             k_bounds = dict {k: (lo, hi)} indices into the third axis of eris
             l_bounds = dict {l: (lo, hi)} indices into the fourth axis of eris
+            kids/lids = AO indices as slice when contiguous, else 1D index array
         """
         ids = pair_id
         screen = self._eri_screen_setup()
@@ -649,43 +683,29 @@ class IntegralEngine:
             return
 
         sij = self.shell_pairs[ids]
-        kds_list = [
-            kds
-            for kds, _ in self._iter_screened_k_pairs(
-                ids, screen, only_triu=False
-            )
-        ]
-        # for kds, _kids, _lids in self._iter_kds_batches(
-        for kds in self._iter_kds_batches(
-            kds_list, batch_size=batch_size
+        if (
+            self.kds_batches_cache is not None
+            and batch_size == self.kds_batches_batch_size
+            and ids in self.kds_batches_cache
         ):
+            kds_iter = self.kds_batches_cache[ids]
+        else:
+            kds_list = list(self._iter_screened_k_pairs(
+                ids, screen, only_triu=False
+            ))
+            kds_iter = self._iter_kds_batches(
+                kds_list, batch_size=batch_size
+            )
+
+        for kds, kids, lids in kds_iter:
             ks = list(dict.fromkeys(kl[0] for kl in kds))
             ls = list(dict.fromkeys(kl[1] for kl in kds))
             gk = CartShellBatch([self.basis.shells[k] for k in ks])
             gl = CartShellBatch([self.basis.shells[k] for k in ls])
-            # if isinstance(_kids, slice):
-            #     gk = CartShellBatch(self.basis.shells[_kids])
-            # else:
-            #     gk = CartShellBatch([self.basis.shells[k] for k in _kids])
-            # if isinstance(_lids, slice):
-            #     gl = CartShellBatch(self.basis.shells[_lids])
-            # else:
-            #     gl = CartShellBatch([self.basis.shells[l] for l in _lids])
             skl = CartShellPair(gk, gl)
             eris = sij | skl  # batched calculation in (ij|kl) order
 
-            k_hi = list(itertools.accumulate(sh.nbf for sh in gk.shells)) # cumsum
-            l_hi = list(itertools.accumulate(sh.nbf for sh in gl.shells))
-            k_lo = [0] + k_hi[:-1]
-            l_lo = [0] + l_hi[:-1]
-            k_bounds = {
-                k: (lo, hi) for k, lo, hi in zip(ks, k_lo, k_hi)
-            }
-            l_bounds = {
-                l: (lo, hi) for l, lo, hi in zip(ls, l_lo, l_hi)
-            }
-
-            yield kds, eris, k_bounds, l_bounds
+            yield eris, kds, kids, lids
 
     # end def calc_eri_batch_block()
 

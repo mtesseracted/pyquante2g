@@ -1,5 +1,6 @@
 import os
 import itertools
+import math
 import numpy as np
 from importlib import resources
 from pyquante22.utils.elements import element_symbols
@@ -12,6 +13,32 @@ import pyquante22.array_ops as arr
 # http://www.basissetexchange.org/api/basis/sto-3g/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54
 # http://www.basissetexchange.org/api/basis/cc-pvdz/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36
 # http://www.basissetexchange.org/basis/cc-pvdz/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36
+
+
+def _gto_norm(l, expnt):
+    """Primitive radial normalization for g=r^l exp(-alpha r^2)."""
+    n, alpha = l * 2 + 2, 2 * expnt
+    n1 = 0.5 * (n + 1)
+    # \int_0^\infty x^n exp(-alpha x^2) dx
+    gauss_int = math.gamma(n1) / (2.0 * (alpha ** n1))
+    return 1.0 / math.sqrt(gauss_int)
+
+
+def _normalize_contracted_coeffs(l, exps, coeffs):
+    """Normalize contraction coefficients (PySCF-style).
+
+    Applies the post-contraction normalization factor after primitive norms.
+    """
+    exps = np.asarray(exps, dtype=float)
+    coeffs = np.asarray(coeffs, dtype=float)
+    norms = np.array([_gto_norm(l, e) for e in exps], dtype=float)
+    cs = coeffs * norms
+    ee = exps.reshape(-1, 1) + exps.reshape(1, -1)
+    pref = math.gamma(l + 1.5) / 2.0
+    ee = pref * np.power(ee, -(l + 1.5))
+    val = float(cs @ ee @ cs)
+    s1 = 1.0 / math.sqrt(val)
+    return coeffs * s1
 
 
 class CartGtoCont():
@@ -371,7 +398,7 @@ class CartShellPair():
 #end class CartShellPair():
 
 class BasisSet():
-    def __init__(self, molecule, name='sto-3g', **kwargs):
+    def __init__(self, molecule, name='sto-3g', contraction_norm=True):
         self.molecule = molecule
         # self.bfs = []
         self.shells = []
@@ -395,8 +422,15 @@ class BasisSet():
         for atom in molecule.atoms:
             cen = ao.arr(atom.r)
             for sym, prims in basis_data[element_symbols[atom.atno]]:
-                alphas, coeffs = ao.arr(prims.T)
                 amtot = sym2am[sym]
+                prims = np.asarray(prims, dtype=float)
+                alphas = ao.arr(prims[:, 0])
+                if contraction_norm:
+                    coeffs = ao.arr(_normalize_contracted_coeffs(
+                        amtot, prims[:, 0], prims[:, 1]
+                    ))
+                else:
+                    coeffs = ao.arr(prims[:,1])
                 curr_shell = CartShell(amtot, cen, alphas ,coeffs, ao=ao)
                 self.shells.append(curr_shell)
                 self.shell_range.append(

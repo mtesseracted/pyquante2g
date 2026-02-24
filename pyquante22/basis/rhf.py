@@ -147,6 +147,48 @@ def build_jk_batch(density, integral_engine, batch_size=64):
 
     return j_mat, k_mat
 
+def debug_build_jk_batch_block(integral_engine, batch_size=64):
+    ie, ao = integral_engine, integral_engine.ao
+    basis = ie.basis
+    ranges = basis.shell_range
+    j_4d = ao.zeros((basis.nbf,) * 4)
+
+    def _idx_arr(idx):
+        if isinstance(idx, slice):
+            return ao.arange(idx.start, idx.stop)
+        return idx
+
+    def _take2d(mat, rows, cols):
+        if isinstance(rows, slice) and isinstance(cols, slice):
+            return mat[rows, cols]
+        if isinstance(rows, slice) or isinstance(cols, slice):
+            return mat[rows, cols]
+        return mat[rows[:, None], cols[None, :]]
+
+    for ids in sorted(ie.shell_pairs.keys()):
+        i, j = ids
+        ri, rj = ranges[i], ranges[j] # slices
+        # isz = ri.stop - ri.start # basis.shells[i].nbf
+        # jsz = rj.stop - rj.start
+
+        for eris, kds, kids, lids in ie.calc_eri_batch_block(
+            ids, batch_size=batch_size
+        ):
+            if len(kds) == 0:
+                continue
+
+            kids_arr = _idx_arr(kids)
+            lids_arr = _idx_arr(lids)
+            kid3, lid4 = kids_arr[:, None], lids_arr[None, :]
+
+            j_4d[ri, rj, kid3, lid4] = eris
+            if i != j:
+                j_4d[rj, ri, kid3, lid4] = ao.transpose(eris, (1, 0, 2, 3))
+
+    return j_4d
+
+
+
 
 def build_jk_batch_block(density, integral_engine, batch_size=64):
     ie, ao = integral_engine, integral_engine.ao
@@ -155,57 +197,60 @@ def build_jk_batch_block(density, integral_engine, batch_size=64):
     j_mat = ao.zeros((basis.nbf,) * 2, dtype=density.dtype)
     k_mat = ao.zeros((basis.nbf,) * 2, dtype=density.dtype)
 
+    def _idx_arr(idx):
+        if isinstance(idx, slice):
+            return ao.arange(idx.start, idx.stop)
+        return idx
+
+    def _take2d(mat, rows, cols):
+        if isinstance(rows, slice) and isinstance(cols, slice):
+            return mat[rows, cols]
+        if isinstance(rows, slice) or isinstance(cols, slice):
+            return mat[rows, cols]
+        return mat[rows[:, None], cols[None, :]]
+
     for ids in sorted(ie.shell_pairs.keys()):
         i, j = ids
         ri, rj = ranges[i], ranges[j]
-        jids = ao.arange(rj.start, rj.stop) # needed for exchange symmetry
         j_block = ao.zeros((basis.shells[i].nbf, basis.shells[j].nbf))
 
-        for kds, eris, k_bounds, l_bounds in ie.calc_eri_batch_block(ids, batch_size=batch_size):
+        for eris, kds, kids, lids in ie.calc_eri_batch_block(
+            ids, batch_size=batch_size
+        ):
             if len(kds) == 0:
                 continue
 
-            kids = ao.concat([ao.arange(ranges[k].start, ranges[k].stop) 
-                for k in k_bounds.keys()])
-            lids = ao.concat([ao.arange(ranges[k].start, ranges[k].stop) 
-                for k in l_bounds.keys()])
+            kids_arr = _idx_arr(kids)
+            lids_arr = _idx_arr(lids)
 
             # fill in J
-            d_kl = density[kids[:, None], lids[None, :]]
+            d_kl = _take2d(density, kids, lids)
             kl_block = ao.einsum("kl,ijkl->ij", d_kl, eris)
             j_block += kl_block
 
-            d_lk = density[lids[:, None], kids[None, :]]  # add symmetry
-            mask = ao.xp.isin(lids[:,None], kids, invert=True) | \
-                ao.xp.isin(kids[None,:], lids, invert=True)
+            d_lk = _take2d(density, lids, kids)  # add symmetry
+            mask = ao.xp.isin(lids_arr[:, None], kids_arr, invert=True) | \
+                ao.xp.isin(kids_arr[None, :], lids_arr, invert=True)
             lk_block = ao.einsum("lk,ijkl->ij", d_lk * mask, eris)
             j_block += lk_block
 
             # fill in K
-            d_jl = density[rj, lids]
+            d_jl = _take2d(density, rj, lids)
             jl_block = ao.einsum("jl,ijkl->ik", d_jl, eris)
             k_mat[ri, kids] += jl_block
 
-            # d_lj = density[lids, rj]
-            # mask = ao.xp.isin(lids[:,None], jids, invert=True) | \
-            #     ao.xp.isin(jids[None,:], lids, invert=True)
-            # lj_block = ao.einsum("lj,ijkl->ik", d_lj * mask, eris)
-            # k_mat[ri, kids] += lj_block
-
-            d_jk = density[rj, kids]
+            d_jk = _take2d(density, rj, kids)
             eri_ijlk = ao.transpose(eris, (0, 1, 3, 2))
-            mask = ao.xp.isin(lids[:,None], kids, invert=True) | \
-                ao.xp.isin(kids[None,:], lids, invert=True)
             jk_block = ao.einsum("jk,ijlk->il", d_jk, eri_ijlk * mask)
             k_mat[ri, lids] += jk_block
 
             if i != j:
-                d_il = density[ri, lids]
+                d_il = _take2d(density, ri, lids)
                 eri_jikl = ao.transpose(eris, (1, 0, 2, 3))
                 il_block = ao.einsum("il,jikl->jk", d_il, eri_jikl)
                 k_mat[rj, kids] += il_block
 
-                d_ik = density[ri, kids]
+                d_ik = _take2d(density, ri, kids)
                 eri_jilk = ao.transpose(eris, (1, 0, 3, 2))
                 ik_block = ao.einsum("ik,jilk->jl", d_ik, eri_jilk * mask)
                 k_mat[rj, lids] += ik_block
@@ -230,7 +275,7 @@ def scf_rhf(
     t0 = time.perf_counter()
     s_mat, t_mat, v_mat = ie.one_e_mats.values()
     hcore = t_mat + v_mat
-    eri4d = ie.build_eri_4d()
+    eri4d = None # lazy build if needed
 
     nocc = ie.basis.molecule.nclosed()
     s_inv_sqrt = orthogonalizer(s_mat, ao)
@@ -246,43 +291,13 @@ def scf_rhf(
     for it in range(1, max_iter + 1):
         # Build Fock from the *current* density
         if batch_size is not None and batch_size > 0:
-            j_mat, k_mat = build_jk_batch(density, ie, batch_size=batch_size)
+            j_mat, k_mat = build_jk_batch_block(density, ie, batch_size=batch_size)
             g_mat = j_mat - 0.5 * k_mat
             fock = hcore + g_mat
 
         else:
+            eri4d = ie.build_eri_4d() if eri4d is None else eri4d
             fock, j_mat, k_mat, g_mat = build_fock_jk(hcore, eri4d, density, ao)
-
-        if debug:
-            jtmp, ktmp = build_jk_batch(density, ie, batch_size=batch_size)
-            fock, j_mat, k_mat, g_mat = build_fock_jk(hcore, eri4d, density, ao)
-            diff = jtmp - j_mat
-            mask = j_mat > 0
-            perrs = diff[mask] / j_mat[mask]
-            jpmax = ao.abs(perrs).max()
-            assert jpmax < 1e-14, "jtmp mismatch"
-            diff = ktmp - k_mat
-            mask = k_mat > 0
-            perrs = diff[mask] / k_mat[mask]
-            kpmax = ao.abs(perrs).max()
-            assert kpmax < 1e-14, "ktmp mismatch"
-
-
-            # jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=batch_size)
-            for ii in range(2, 24):
-                jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=ii)
-                diff = jtmp - j_mat
-                mask = j_mat > 0
-                perrs = diff[mask] / j_mat[mask]
-                jpmax = ao.abs(perrs).max()
-                diff = ktmp - k_mat
-                mask = k_mat > 0
-                perrs = diff[mask] / k_mat[mask]
-                kpmax = ao.abs(perrs).max()
-                assert jpmax < 1e-12, "jtmp mismatch"
-                assert kpmax < 1e-12, "ktmp mismatch"
-                print(f"{ii} J%: {jpmax:.2e} K%: {kpmax:.2e}")
-
 
 
         # Compute a CONSISTENT energy for this same density (no extra Fock build)
@@ -343,6 +358,8 @@ def scf_rhf(
 
 if __name__ == "__main__":
 
+    from importlib import resources
+    import importlib.util
     import numpy as np
     np.set_printoptions(precision=2, suppress=False, linewidth=200)
     import matplotlib.pyplot as plt
@@ -353,6 +370,7 @@ if __name__ == "__main__":
     from pyquante22.basis.basisset import BasisSet
     from pyquante22.basis.integrals import IntegralEngine
     import pyquante22.array_ops as arr
+
 
     def nsymm(n):
         return n * (n + 1) // 2
@@ -367,12 +385,29 @@ if __name__ == "__main__":
 
     aoi = arr.ArrayOps(
         "torch", device="cpu", default_dtype="float64", int_dtype="int64"
-    )
+    ) # ArrayOps instance
 
-    xyzs = "H 0 0 0\nF 1.4 0 0"
-    m1 = Molecule(xyzs, ao=aoi)
-    # b1 = BasisSet(m1, name='sto-3g')
-    # m1 = Molecule("./samples/glycine.sdf", ao=aoi)
+    sample_dir = resources.files("pyquante22").joinpath("..","samples")
+    module_path = sample_dir / "samples.py"
+    module_name = "samples.samples"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    raw_samples = module.raw_samples
+    # raw_drugs = module.raw_drugs
+    sample_moleculues = [Molecule(samp, ao=aoi) for samp in raw_samples]
+
+    m1 = [m for m in sample_moleculues if "Propane" in m.name][0] 
+    # m1 = [m for m in sample_moleculues if m.name == "Benzene"][0]
+
+    # xyzs = "H 0 0 0\nF 1.4 0 0"
+    maxiter=100
+    # d = 0.9
+    # xyzs = "C 0 0 0\n" + \
+    #     f"H {d} 0 0\nH {-d} 0 0\n" + \
+    #     f"H 0 {d} 0\nH 0 {-d} 0\n" #+ \
+    #     # f"H 0 0 {d}\nH 0 0 {-d}"
+    # m1 = Molecule(xyzs, ao=aoi)
     print(f"Using molecule: {str(m1)}")
     b1 = BasisSet(m1, name='sto-3g')
     # b1 = BasisSet(m1, name='aug-cc-pvqz')
@@ -381,11 +416,95 @@ if __name__ == "__main__":
     )
 
     t0 = time.perf_counter()
-    ie1 = IntegralEngine(b1)
+    ie1 = IntegralEngine(b1, overlap_tol=0.0, batch_size=64)
     t1 = time.perf_counter()
     print(f"Time to do init integral engine: {t1-t0:.2f}s")
 
-    if True:
+    if True: # build fock
+        t0 = time.perf_counter()
+        ie1.build_one_electron_matrices()
+        t1 = time.perf_counter()
+        print(f"Time to do build 1e mats: {t1-t0:.2f}s")
+
+        t0 = time.perf_counter()
+        j_tmp = debug_build_jk_batch_block(ie1, batch_size=64)
+        t1 = time.perf_counter()
+        print(f"Time to do run debug j batch block: {t1-t0:.2f}s")
+
+        t0 = time.perf_counter()
+        ie1.build_eri_sparse()
+        t1 = time.perf_counter()
+        print(f"Time to do build sparse eri: {t1-t0:.2f}s")
+
+        s_mat, t_mat, v_mat = ie1.one_e_mats.values()
+        hcore = t_mat + v_mat
+
+        nocc = ie1.basis.molecule.nclosed()
+        s_inv_sqrt = orthogonalizer(s_mat, aoi)
+        density = guess_density_from_core(hcore, s_mat, nocc, aoi)
+        enuc = ie1.basis.molecule.nuclear_repulsion()
+
+        t0 = time.perf_counter()
+        j_batch, k_batch = build_jk_batch_block(density, ie1, batch_size=None)
+        g_batch = j_batch - 0.5 * k_batch
+        fock_batch = hcore + g_batch
+        t1 = time.perf_counter()
+        print(f"Time to do build jk batch: {t1-t0:.2f}s")
+
+        t0 = time.perf_counter()
+        eri4d = ie1.build_eri_4d()
+        fock, j_mat, k_mat, g_mat = build_fock_jk(hcore, eri4d, density, aoi)
+        t1 = time.perf_counter()
+        print(f"Time to do build jk dense: {t1-t0:.2f}s")
+
+        # t0 = time.perf_counter()
+        # eri_ref = ie1.build_eri_4d_ref()
+        # fock_ref, j_ref, k_ref, g_ref = build_fock_jk(hcore, eri_ref, density, aoi)
+        # t1 = time.perf_counter()
+        # print(f"Time to do build jk ref: {t1-t0:.2f}s")
+
+        # debug summary on 19Feb26:
+        # j_tmp (which is an eri tensor, not J matrix)
+        # disagrees with eri4d the most at (20, 21, 0, 13)
+        idfull = (20, 21, 0, 13)
+        # j_tmp[idfull] = -4.117e-8
+        # eri4d[idfull] = -1.437e-31
+
+
+
+        debug_var = 1
+
+        # get the 2d index for largest %err
+        diffs = j_batch - j_mat
+        mask = aoi.abs(j_mat) > 0.0 # make this bigger to find more idfulls
+        pfull = diffs / j_mat
+        pfull[~mask] = 0.0
+        idmax = aoi.abs(pfull).argmax().item()
+        idxs = aoi.where(mask)
+        idfull = tuple(int(ax[idmax]) for ax in idxs)
+
+        # elements @ max % error
+        ja, jb = j_batch[idfull].item(), j_mat[idfull].item()
+        jp = pfull[idfull].item()
+
+        # shells the max %err elements belong to
+        sa, sb = -1, -1
+        for ii, ss in enumerate(b1.shell_range):
+            if idfull[0] in range(ss.start, ss.stop):
+                sa = ii
+            if idfull[1] in range(ss.start, ss.stop):
+                sb = ii
+
+        assert ie1.shell_pair_ove_max[sa,sb] > 0
+        assert ie1.shell_pair_eri_max[sa,sb] > 0
+        # since a pair index of J comes from the sum of all other
+        # pairs, only checking the shell-pair max matrix isn't sufficient
+
+
+
+
+
+    if True: # run scf
         t0 = time.perf_counter()
         ie1.build_one_electron_matrices()
         t1 = time.perf_counter()
@@ -396,116 +515,161 @@ if __name__ == "__main__":
         t1 = time.perf_counter()
         print(f"Time to do build sparse eri: {t1-t0:.2f}s")
 
-        scf_result = scf_rhf(ie1, batch_size=7)
+        scf_result = scf_rhf(ie1, batch_size=None, 
+                             max_iter=maxiter, verbose=True)
         print(
             f"SCF converged {scf_result['converged']} "
             f"in {scf_result['iterations']} iterations, "
             f"E = {scf_result['energy']:.12f}"
         )
+        scf_result1 = scf_result
 
-        debug_var = 1
-
-    def isprime(n):
-        if n <= 2:
-            return True
-        lim = int(n**0.5) + 1
-        for i in range(2, lim):
-            if n % i == 0:
-                return False
-        return True
-
-    primes = [n for n in range(2, 100) if isprime(n)]
-    def prime_facs(n):
-        n = int(round(float(n)))
-        if n == 1:
-            return [1]
-        facs = []
-        for p in primes:
-            if p * p > n:
-                break
-            while n % p == 0:
-                facs.append(p)
-                n //= p
-        if n > 1:
-            facs.append(n)
-        return facs
-
-
-    screen = ie1._eri_screen_setup()
-    kds_list = [kds for kds, _ in ie1._iter_screened_k_pairs((0,0), screen, only_triu=False)]
-
-    for bs in range(2, 28, 4):
-        # kds_iter = list(ie1._iter_eri_kds_batches(kds_list, batch_size=bs))
-        kds_iter = list(ie1._iter_kds_batches(kds_list, batch_size=bs))
-
-        ao_mat = aoi.ones((b1.nbf, b1.nbf))
-        sh_mat = aoi.ones((b1.nsh, b1.nsh))
-
-        for ibatch, kds_batch in enumerate(kds_iter):
-            kds, kids, lids = kds_batch
-            for k,l in kds:
-                sh_mat[k, l] *= primes[ibatch]
-            ao_mat[kids, lids] *= primes[ibatch]
-        # sh_mat[0,0] *= 5 # debug
-
-        def _to_numpy(x):
-            if hasattr(x, "detach"):
-                return x.detach().cpu().numpy()
-            if hasattr(x, "numpy"):
-                return x.numpy()
-            return np.asarray(x)
-
-        sh_np = _to_numpy(sh_mat)
-        ao_np = _to_numpy(ao_mat)
-        uniq_vals = np.unique(np.concatenate([sh_np.ravel(), ao_np.ravel()]))
-        if uniq_vals.size == 1:
-            boundaries = np.array([uniq_vals[0] - 0.5, uniq_vals[0] + 0.5])
-        else:
-            mids = (uniq_vals[:-1] + uniq_vals[1:]) / 2.0
-            first = uniq_vals[0] - (mids[0] - uniq_vals[0])
-            last = uniq_vals[-1] + (uniq_vals[-1] - mids[-1])
-            boundaries = np.concatenate([[first], mids, [last]])
-
-        cmap = plt.get_cmap("gist_ncar", uniq_vals.size)
-        norm = colors.BoundaryNorm(boundaries, cmap.N)
-
-        fig, axes = plt.subplots(1, 2, figsize=(8, 4), constrained_layout=True)
-        im0 = axes[0].matshow(sh_np, cmap=cmap, norm=norm, interpolation="none")
-        axes[0].set_title("sh_mat")
-        im1 = axes[1].matshow(ao_np, cmap=cmap, norm=norm, interpolation="none")
-        axes[1].set_title("ao_mat")
-        cbar = fig.colorbar(im1, ax=axes, ticks=uniq_vals)
-        cbar.ax.set_yticklabels([str(v) for v in uniq_vals])
-
-        def _annotate_mat(ax, mat):
-            nrows, ncols = mat.shape
-            max_dim = max(nrows, ncols)
-            if max_dim <= 10:
-                fontsize = 8
-            elif max_dim <= 20:
-                fontsize = 6
-            else:
-                fontsize = 4
-            for i in range(nrows):
-                for j in range(ncols):
-                    val, label = mat[i,j], ""
-                    if val > 1:
-                        label = ",".join(str(primes.index(f)) for f in prime_facs(val))
-
-                    if ',' in label:
-                        ax.text(j, i, label, ha="center", va="center", color="red", 
-                            fontsize=round(1.4*fontsize),
-                            path_effects=[pe.Stroke(linewidth=2, foreground="black"), pe.Normal(),],
-                        )
-                    else:
-                        ax.text(j, i, label, ha="center", va="center", fontsize=fontsize, color="black",)
-
-        _annotate_mat(axes[0], sh_np)
-        _annotate_mat(axes[1], ao_np)
-        fig.suptitle(f"Batch size {bs} unique vals: {uniq_vals}")
-        plt.show()
-        
+        scf_result = scf_rhf(ie1, batch_size=ie1.batch_size,
+                             max_iter=maxiter, verbose=True)
+        print(
+            f"SCF converged {scf_result['converged']} "
+            f"in {scf_result['iterations']} iterations, "
+            f"E = {scf_result['energy']:.12f}"
+        )
+        scf_result2 = scf_result
 
     debug_var = 1
 
+    if False: # debug eri batch iteration with a plot
+
+        # hack hashing by doing prime factorization
+        def isprime(n): 
+            if n <= 2: return True
+            for i in range(2, int(n**0.5) + 1):
+                if n % i == 0: return False
+            return True
+
+        primes = [n for n in range(2, 100) if isprime(n)]
+        def prime_facs(n):
+            n = int(round(float(n)))
+            if n == 1: return [1]
+            facs = []
+            for p in primes:
+                if p * p > n: break
+                while n % p == 0:
+                    facs.append(p)
+                    n //= p
+            if n > 1: facs.append(n)
+            return facs
+
+        screen = ie1._eri_screen_setup()
+        kds_list = list(ie1._iter_screened_k_pairs((0,0), screen, only_triu=False))
+
+        for bs in range(2, 28, 4):
+            # kds_iter = list(ie1._iter_eri_kds_batches(kds_list, batch_size=bs))
+            kds_iter = list(ie1._iter_kds_batches(kds_list, batch_size=bs))
+
+            ao_mat = aoi.ones((b1.nbf, b1.nbf))
+            sh_mat = aoi.ones((b1.nsh, b1.nsh))
+
+            for ibatch, kds_batch in enumerate(kds_iter):
+                kds, kids, lids = kds_batch
+                for k,l in kds:
+                    sh_mat[k, l] *= primes[ibatch]
+                ao_mat[kids, lids] *= primes[ibatch]
+            # sh_mat[0,0] *= 5 # debug
+
+            def _to_numpy(x):
+                if hasattr(x, "detach"):
+                    return x.detach().cpu().numpy()
+                if hasattr(x, "numpy"):
+                    return x.numpy()
+                return np.asarray(x)
+
+            sh_np = _to_numpy(sh_mat)
+            ao_np = _to_numpy(ao_mat)
+            uniq_vals = np.unique(np.concatenate([sh_np.ravel(), ao_np.ravel()]))
+            if uniq_vals.size == 1:
+                boundaries = np.array([uniq_vals[0] - 0.5, uniq_vals[0] + 0.5])
+            else:
+                mids = (uniq_vals[:-1] + uniq_vals[1:]) / 2.0
+                first = uniq_vals[0] - (mids[0] - uniq_vals[0])
+                last = uniq_vals[-1] + (uniq_vals[-1] - mids[-1])
+                boundaries = np.concatenate([[first], mids, [last]])
+
+            cmap = plt.get_cmap("gist_ncar", uniq_vals.size)
+            norm = colors.BoundaryNorm(boundaries, cmap.N)
+
+            fig, axes = plt.subplots(1, 2, figsize=(8, 4), constrained_layout=True)
+            im0 = axes[0].matshow(sh_np, cmap=cmap, norm=norm, interpolation="none")
+            axes[0].set_title("sh_mat")
+            im1 = axes[1].matshow(ao_np, cmap=cmap, norm=norm, interpolation="none")
+            axes[1].set_title("ao_mat")
+            cbar = fig.colorbar(im1, ax=axes, ticks=uniq_vals)
+            cbar.ax.set_yticklabels([str(v) for v in uniq_vals])
+
+            def _annotate_mat(ax, mat):
+                nrows, ncols = mat.shape
+                max_dim = max(nrows, ncols)
+                if max_dim <= 10:
+                    fontsize = 8
+                elif max_dim <= 20:
+                    fontsize = 6
+                else:
+                    fontsize = 4
+                for i in range(nrows):
+                    for j in range(ncols):
+                        val, label = mat[i,j], ""
+                        if val > 1:
+                            label = ",".join(str(primes.index(f)) for f in prime_facs(val))
+
+                        if ',' in label:
+                            ax.text(j, i, label, ha="center", va="center", color="red", 
+                                fontsize=round(1.4*fontsize),
+                                path_effects=[pe.Stroke(linewidth=2, foreground="black"), pe.Normal(),],
+                            )
+                        else:
+                            ax.text(j, i, label, ha="center", va="center", fontsize=fontsize, color="black",)
+
+            _annotate_mat(axes[0], sh_np)
+            _annotate_mat(axes[1], ao_np)
+            fig.suptitle(f"Batch size {bs} unique vals: {uniq_vals}")
+            plt.show()
+            
+
+        debug_var = 1
+
     
+    if False: # debug jk batch against dense build
+
+        s_mat, t_mat, v_mat = ie1.one_e_mats.values()
+        hcore = t_mat + v_mat
+        nocc = ie1.basis.molecule.nclosed()
+        # s_inv_sqrt = orthogonalizer(s_mat, ao)
+        density = guess_density_from_core(hcore, s_mat, nocc, ao)
+
+        if debug:
+            jtmp, ktmp = build_jk_batch(density, ie, batch_size=batch_size)
+            fock, j_mat, k_mat, g_mat = build_fock_jk(hcore, eri4d, density, ao)
+            diff = jtmp - j_mat
+            mask = j_mat > 0
+            perrs = diff[mask] / j_mat[mask]
+            jpmax = ao.abs(perrs).max()
+            assert jpmax < 1e-14, "jtmp mismatch"
+            diff = ktmp - k_mat
+            mask = k_mat > 0
+            perrs = diff[mask] / k_mat[mask]
+            kpmax = ao.abs(perrs).max()
+            assert kpmax < 1e-14, "ktmp mismatch"
+
+
+            # jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=batch_size)
+            for ii in range(2, 24):
+                jtmp, ktmp = build_jk_batch_block(density, ie, batch_size=ii)
+                diff = jtmp - j_mat
+                mask = j_mat > 0
+                perrs = diff[mask] / j_mat[mask]
+                jpmax = ao.abs(perrs).max()
+                diff = ktmp - k_mat
+                mask = k_mat > 0
+                perrs = diff[mask] / k_mat[mask]
+                kpmax = ao.abs(perrs).max()
+                assert jpmax < 1e-12, "jtmp mismatch"
+                assert kpmax < 1e-12, "ktmp mismatch"
+                print(f"{ii} J%: {jpmax:.2e} K%: {kpmax:.2e}")
+

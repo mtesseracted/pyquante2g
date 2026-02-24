@@ -39,6 +39,7 @@ misc_ops = [
     "einsum",
     "conv1d",
     "segment_sum",
+    "diag",
 ]
 basic_ops = sum([
     math_ops_unary, 
