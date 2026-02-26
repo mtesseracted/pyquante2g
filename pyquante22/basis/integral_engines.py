@@ -27,7 +27,7 @@ def ndindex_unique_8fold(n):
     ordering: i <= j; k <= l; (i, j) <= (k, l) lexicographically
     """
     pairs = list(ndindex_unique(n, 2))
-    for (i, j), (k, l) in ndindex_unique(pairs, 2):
+    for (i, j), (k, l) in itertools.combinations_with_replacement(pairs, 2):
         yield i, j, k, l
 
 
@@ -92,9 +92,8 @@ class IntegralEngineBase:
     #end def build_one_electron_matrices(self):
 
 
-    def build_eri_4d(self):
-        """build in full loop form for error-checking"""
-        # still exploit 4-fold symmetry though
+    def build_eri_4d_bf(self):
+        """build in per-basis func loop form with 4-fold symmetry"""
         nbf = self.basis.nbf
         bfs = self.basis.to_prims()
         eri4d = self.ao.zeros((self.basis.nbf,) * 4)
@@ -118,8 +117,54 @@ class IntegralEngineBase:
                         eri4d[jj, ii, ll, kk] = val
 
         return eri4d
-    #def build_eri_4d(self):
-#end class IntegralEngineDense:
+    #def build_eri_4d_bf(self):
+
+
+    def build_eri_4d_sh(self):
+        """build in per-shell loop form with 8-fold symmetry """
+        basis = self.basis
+        nsh, nbf, ranges = basis.nsh, basis.nbf, basis.shell_range
+        eri4d = self.ao.zeros((nbf,) * 4)
+
+        shell_pairs = {}
+        for ij in ndindex_unique(nsh, 2):
+            i, j = ij
+            shell_pairs[ij] = basis.shells[i] * basis.shells[j]
+
+        for ijkl in ndindex_unique_8fold(nsh):
+            ij, kl = ijkl[:2], ijkl[2:]
+            sij = shell_pairs[ij]
+            skl = shell_pairs[kl]
+            vals = sij | skl
+            rngs = (
+                ranges[ij[0]], ranges[ij[1]],
+                ranges[kl[0]], ranges[kl[1]],
+            )
+            self._fill_eri_symm(eri4d, rngs, vals, self.ao)
+
+        return eri4d
+    #end def build_eri_4d_sh(self):
+
+    @staticmethod
+    def _fill_swap_symm(array, ids, vals, ao):
+        """fill (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk)"""
+        array[ids] = vals
+        id2 = (ids[1], ids[0], ids[2], ids[3])
+        array[id2] = ao.transpose(vals, (1, 0, 2, 3))
+        id2 = (ids[0], ids[1], ids[3], ids[2])
+        array[id2] = ao.transpose(vals, (0, 1, 3, 2))
+        id2 = (ids[1], ids[0], ids[3], ids[2])
+        array[id2] = ao.transpose(vals, (1, 0, 3, 2))
+
+    @classmethod
+    def _fill_eri_symm(cls, array, ids, vals, ao):
+        """fill (ij|kl) = (ji|kl) = (ij|lk) = (ji|lk), repeat for (kl|ij)"""
+        cls._fill_swap_symm(array, ids, vals, ao)
+        id2 = (ids[2], ids[3], ids[0], ids[1])
+        val2 = ao.transpose(vals, (2, 3, 0, 1))
+        cls._fill_swap_symm(array, id2, val2, ao)
+
+#end class IntegralEngineBase:
 
 
 class IntegralEngineSparse(IntegralEngineBase):
@@ -158,16 +203,17 @@ if __name__ == "__main__":    # simple smoke test
         "torch", device="cpu", default_dtype="float64", int_dtype="int64"
     )
 
-    sample_molecules = ["Hydrogen", ]#"Water", "Methane", "Propane"]
+    sample_molecules = ["Hydrogen", "Water", "Methane", "Propane"]
     sample_bases = ["sto-3g", "aug-cc-pvdz"]
     sample_list = [(sample_bases[0], mol) for mol in sample_molecules]
     sample_list += [(sample_bases[1], mol) for mol in sample_molecules[:2]]
 
     tensor_names = ['S', 'H', 'ERI']
     ref_tensor_path = "dev_scripts/tmp"
-    rtol, atol = 1e-10, 1e-10
+    rtol, atol = 1e-14, 1e-14
 
     for basis_name, sample_name in sample_list:
+        t0 = time.perf_counter()
         print(f"\n=== Sample: {sample_name}, Basis: {basis_name} ===")
         mol = load_sample_molecule(sample_name, aoi)
         basis = BasisSet(mol, name=basis_name)
@@ -176,8 +222,13 @@ if __name__ == "__main__":    # simple smoke test
         ie = IntegralEngineBase(basis)
         s, t, v = ie.build_one_electron_matrices()
         h = t + v
-        # eri4d = ie.build_eri_4d()
-        my_tensors = {'S': s, 'H': h,}# 'ERI': eri4d}
+        my_tensors = {'S': s, 'H': h}
+        eri4d = ie.build_eri_4d_sh()
+        my_tensors = {'S': s, 'H': h, 'ERI': eri4d}
+        t1 = time.perf_counter()
+        print(f"Calcualted integrals in {t1-t0:.2f}s")
+
+
 
         sample_tag = sample_name.replace(" ", "_")
         sample_tag += f"_{basis_name.replace('-', '')}"
@@ -209,6 +260,8 @@ if __name__ == "__main__":    # simple smoke test
                 print(f"{name} mismach: max%err: {pmax:.4e} @{idfull}, a: {amax:.4e}, b: {bmax:.4e}")
 
                 debug_var = 1
+        
+        nbf, nsh, ranges = basis.nbf, basis.nsh, basis.shell_range
             
 
     debug_var = 1

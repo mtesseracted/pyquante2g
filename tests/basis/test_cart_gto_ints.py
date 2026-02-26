@@ -1,11 +1,11 @@
 # use a driver func to test all ints with the same code
-# NOTE: error tolerances are not great for NAI and ERI,
+# NOTE: error tolerances are not fp64 ideal for NAI and ERI,
 # by the time you get up to amom~20, we see errors on the order
 # of 1e-13. Usually they're closer to 1e-14, but going into 
 # the code shows individual elements of the calculation
 # such as the A_array in calc_nai() have errors on the order of
 # 1e-13, with a similar story for calc_eri(). My conclusion
-# is that most of these errors stem from the floating points
+# is that most of these errors stem from the floating point
 # error associated with subtracting two numbers that are of
 # similar order of magnitude, creating a large loss of precision.
 # There's really nothing to be done about it at this point,

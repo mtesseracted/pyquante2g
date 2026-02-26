@@ -8,9 +8,53 @@ class CartGtoPrim:
     """Cartesian GTO Primitive (batched)
     """
 
+    @staticmethod
+    def create_contraction(
+        amom, cen, alpha, coeffs=None, nd=3, ao=None, co=None, gm=None,
+        precompute=True, primitive_norm=True,
+    ):
+        """Create a contracted GTO by broadcasting a single center/amom."""
+        ao = ao or arr.get_default_ops()
+        AT = ao.ArrayType
+
+        if not isinstance(amom, AT):
+            amom = ao.arr(amom, dtype=ao.int_dtype)
+        if not isinstance(cen, AT):
+            cen = ao.arr(cen, dtype=ao.default_dtype)
+        if getattr(amom, "ndim", None) != 1 or len(amom) != nd:
+            raise ValueError(f"amom must be shape ({nd},)")
+        if getattr(cen, "ndim", None) != 1 or len(cen) != nd:
+            raise ValueError(f"cen must be shape ({nd},)")
+
+        if not isinstance(alpha, AT):
+            alpha = ao.arr(alpha, dtype=ao.default_dtype)
+        if getattr(alpha, "ndim", 0) == 0:
+            alpha = ao.arr([alpha], dtype=ao.default_dtype)
+        if getattr(alpha, "ndim", None) != 1:
+            raise ValueError("alpha must be 1D for create_contraction")
+        B = alpha.shape[0]
+
+        amom = ao.tile(amom.reshape(1, nd), (B, 1))
+        cen = ao.tile(cen.reshape(1, nd), (B, 1))
+
+        if coeffs is not None:
+            if not isinstance(coeffs, AT):
+                coeffs = ao.arr(coeffs, dtype=ao.default_dtype)
+            if getattr(coeffs, "ndim", 0) == 0:
+                coeffs = ao.arr([coeffs], dtype=ao.default_dtype)
+            if getattr(coeffs, "ndim", None) != 1:
+                raise ValueError("coeffs must be 1D for create_contraction")
+            if coeffs.shape[0] != B:
+                raise ValueError("coeffs length must match alpha length")
+
+        return CartGtoPrim(
+            amom, cen, alpha, coeffs=coeffs, nd=nd, ao=ao, co=co, gm=gm,
+            precompute=precompute, primitive_norm=primitive_norm,
+        )
+
     def __init__(
         self, amom, cen, alpha, coeffs=None, nd=3, ao=None, co=None, gm=None, 
-        precompute=True, norm_coeffs=True,
+        precompute=True, primitive_norm=True,
     ):
         """
         :param amom: (B,nd) int, angular momentum
@@ -45,6 +89,7 @@ class CartGtoPrim:
         if getattr(alpha, "ndim", None) == 1 and len(alpha) == B * nd: # support legacy
             alpha = alpha.reshape(B, nd)[:, 0]
 
+
         self.amom = amom
         self.cen = cen
         self.alpha = alpha
@@ -57,8 +102,14 @@ class CartGtoPrim:
             assert isinstance(self.coeffs, AT), f"coeffs must be {AT} type"
             if getattr(coeffs, "ndim", 0) == 0: # scalar
                 self.coeffs = self.ao.arr([coeffs])
-            if norm_coeffs:
+            assert self.coeffs.shape[0] == B, "Coeffs batch size mismatch with amom"
+            if primitive_norm:
                 self.coeffs = self.coeffs * self.norm
+
+        # check all the batched variables are batch size
+        assert self.amom.shape[0] == B
+        assert self.cen.shape[0] == B, "cen batch size mismatch with amom"
+        assert self.alpha.shape[0] == B, "alpha batch size mismatch with amom"
 
 
     @staticmethod
@@ -79,7 +130,7 @@ class CartGtoPrim:
         coeffs = None if self.coeffs is None else self.coeffs[idx]
         ret = CartGtoPrim(self.amom[idx], self.cen[idx],self.alpha[idx],
             coeffs=coeffs, nd=self.nd, ao=self.ao, co=self.co, gm=self.gm,
-            precompute=False,)
+            precompute=False, primitive_norm=False)
         if self.norm is not None: ret.norm = self.norm[idx:idx+1]
         if self.coeffs is not None: ret.coeffs = self.coeffs[idx:idx+1]
         return ret
@@ -102,6 +153,7 @@ class CartGtoPrim:
             co=self.co,
             gm=self.gm,
             precompute=False,
+            primitive_norm=False,
         )
         if self.coeffs is not None and other.coeffs is not None:
             ret.coeffs = self.ao.concat([self.coeffs, other.coeffs], axis=0)
@@ -716,7 +768,7 @@ class CartGtoPrimPair:
         # center and exponent, and similarly for gb.
         # Falls back to the general case if the condition is not met.
         ao, co = self.ao, self.co
-        if ao.abs(self.pab - self.pab[0]).max().item() != 0: # check validity
+        if ao.abs(self.pab - self.pab[0,0]).max().item() != 0: # check validity
             return self.calc_eri(self)  # fallback to general case
 
         Na, Nb = len(self.ga), len(self.gb)

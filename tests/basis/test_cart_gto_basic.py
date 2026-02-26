@@ -19,6 +19,10 @@ def pad_ragged(ragged):  # stack a ragged list by padding to the max size
     return np.array(padded)
 
 
+def to_numpy(ao, x):
+    return np.asarray(ao.tolist(x))
+
+
 # @TODO add pytest.fixture of backends to test over, that will ensure
 # the convolution is correct before adding an explicit test
 # it can only do one right now, because it's hardcoded at the top of cart_gto.py
@@ -28,13 +32,13 @@ def test_add(ao_eps):
     amp = ao.arr([1, 0, 0], dtype=ao.int_dtype)
     r0 = ao.arr([0, 0, 0])
     rb = ao.arr([0.125, 0.25, 0.5])
-    aa = ao.arr([1.0] * 3)
-    gs = CGP(ams, r0, aa, ao=ao)
-    assert len(gs) == 1
+    aa = ao.arr([1.0] * 2)
+    gs = CGP.create_contraction(ams, r0, aa, ao=ao)
+    assert len(gs) == 2
     gs2 = gs + gs
-    assert len(gs2) == 2
-    gs3 = gs2 + CGP(amp, rb, aa, ao=ao)
-    assert len(gs3) == 3
+    assert len(gs2) == 4
+    gs3 = gs2 + CGP.create_contraction(amp, rb, aa, ao=ao)
+    assert len(gs3) == 6
 
 
 def test_mul(ao_eps):
@@ -44,21 +48,48 @@ def test_mul(ao_eps):
     r0 = ao.arr([0, 0, 0])
     rb = ao.arr([0.125, 0.25, 0.5])
     aa = ao.arr([1.0] * 3)
-    ga = CGP(ams, r0, aa, ao=ao)
+    ga = CGP.create_contraction(ams, r0, aa, ao=ao)
     ga = ga + ga
-    gb = CGP(amp, rb, aa, ao=ao)
+    gb = CGP.create_contraction(amp, rb, aa, ao=ao)
     gmul = ga * gb
     gab = CGPP(ga, gb)
     assert gab.shape == gmul.shape
     assert ao.abs(gab.pab - gmul.pab).max().item() == 0.0
 
 
+def test_calc_eri_self_fallback_mixed_prims(ao_eps):
+    ao, EPS = ao_eps
+    ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
+    ra = ao.arr([0.0, 0.0, 0.0])
+    rb = ao.arr([0.5, 0.0, 0.0])
+
+    # Na=1, Nb>1 (variation along b should trigger fallback)
+    ga = CGP.create_contraction(ams, ra, ao.arr([0.8]), ao=ao)
+    gb = CGP.create_contraction(ams, rb, ao.arr([0.2, 0.6]), ao=ao)
+    gpp = CGPP(ga, gb)
+    pab_var = ao.abs(gpp.pab - gpp.pab[0, 0]).max().item()
+    assert pab_var > 0.0
+    eri_self = to_numpy(ao, gpp.calc_eri_self())
+    eri_gen = to_numpy(ao, gpp.calc_eri(gpp))
+    assert np.allclose(eri_self, eri_gen, rtol=1e-10, atol=1e-12)
+
+    # Swapped: Na>1, Nb=1 (variation along a should trigger fallback)
+    ga = CGP.create_contraction(ams, ra, ao.arr([0.2, 0.6]), ao=ao)
+    gb = CGP.create_contraction(ams, rb, ao.arr([0.8]), ao=ao)
+    gpp = CGPP(ga, gb)
+    pab_var = ao.abs(gpp.pab - gpp.pab[0, 0]).max().item()
+    assert pab_var > 0.0
+    eri_self = to_numpy(ao, gpp.calc_eri_self())
+    eri_gen = to_numpy(ao, gpp.calc_eri(gpp))
+    assert np.allclose(eri_self, eri_gen, rtol=1e-10, atol=1e-12)
+
+
 def test_str(ao_eps):
     ao, EPS = ao_eps
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     r0 = ao.arr([0, 0, 0])
-    aa = ao.arr([1.0] * 3)
-    gto = CGP(ams, r0, aa, ao=ao)
+    aa = ao.arr([1.0] * 1)
+    gto = CGP.create_contraction(ams, r0, aa, ao=ao)
     s = str(gto)
     assert "GTO" in s, f"Unexpected str({type(gto)}), was the method updated?"
 
@@ -72,7 +103,7 @@ def test_repr(ao_eps):
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     r0 = ao.arr([0, 0, 0])
     aa = ao.arr([1.0] * 3)
-    gto = CGP(ams, r0, aa, ao=ao)
+    gto = CGP.create_contraction(ams, r0, aa, ao=ao)
     s = repr(gto)
     assert "CartGtoPrim" in s, f"Unexpected repr({type(gto)}), was the method updated?"
 
@@ -153,8 +184,8 @@ def test_calc_binoms(ao_eps):
                         min(lmax + 1, 16) * 16 * EPS
                     )  # loosen tolerances for high amom
                     atol = min(lmax + 1, 16) / 16 * EPS
-                    g1 = CGP(a1, r1, aa, ao=ao)
-                    g2 = CGP(a2, r2, ab, ao=ao)
+                    g1 = CGP.create_contraction(a1, r1, aa, ao=ao)
+                    g2 = CGP.create_contraction(a2, r2, ab, ao=ao)
                     g12 = CGPP(g1, g2)
                     bps = np.asarray(g12.calc_prod_binoms().tolist())
                     bpgt = gt_bps_pair(g12, method='ref')
@@ -251,8 +282,8 @@ def test_calc_h_array(ao_eps):
                         min(lmax + 1, 16) * 16 * EPS
                     )  # loosen tolerances for high amom
                     atol = min(lmax + 1, 16) / 16 * EPS
-                    g1 = CGP(a1, r1, aa, ao=ao)
-                    g2 = CGP(a2, r2, ab, ao=ao)
+                    g1 = CGP.create_contraction(a1, r1, aa, ao=ao)
+                    g2 = CGP.create_contraction(a2, r2, ab, ao=ao)
                     g12 = CGPP(g1, g2)
                     hab = np.asarray(g12.calc_h_array().tolist())
                     hgt = gt_h_array(g12)
@@ -280,7 +311,7 @@ def test_norm_basic(ao_eps):
 
     ams = ao.arr([0,]*3, dtype=ao.int_dtype)
     r0 = ao.arr([0,]*3)
-    aa = ao.arr([1,]*3)
+    aa = ao.arr([1,]*1)
     ans = CGP(ams, r0, aa, ao=ao).norm
     assert np.isclose(ans.item(), n3d, rtol=16*EPS, atol=0)
 
@@ -297,7 +328,7 @@ def test_norm_vs_overlap(ao_eps):
     rd = ao.arr([4.0, 1.0, 2.0])
     am_list = [ams, am1, am2]
     r_list = [r0, rb, rc, rd]
-    aa = ao.arr([0.25] * 3)
+    aa = ao.arr([0.25] * 1)
 
     for r1 in r_list:
         for a1 in am_list:
@@ -324,8 +355,8 @@ def test_eri_self(ao_eps):
     aa_list = [ao.arr([v]) for v in [0.5, 1.0, 2.0]]
 
     # test same center and exponent for a and b respectively
-    ga_list = [CGP(am, ra, aa_list[0], ao=ao) for am in am_list]
-    gb_list = [CGP(am, rb, aa_list[1], ao=ao) for am in am_list]
+    ga_list = [CGP.create_contraction(am, ra, aa_list[0], ao=ao) for am in am_list]
+    gb_list = [CGP.create_contraction(am, rb, aa_list[1], ao=ao) for am in am_list]
     ga, gb = sum(ga_list), sum(gb_list)
     gab = CGPP(ga, gb)
     assert ao.abs(gab.pab - gab.pab[0]).max().item() == 0, "cannot test eri_self with non-uniform pab"
@@ -339,8 +370,8 @@ def test_eri_self(ao_eps):
     assert passed, f"fail eri_self %err: {perr:.4e}"
 
     # test same center for both a and b, different exponents
-    ga_list = [CGP(am, ra, aa, ao=ao) for am in am_list for aa in aa_list]
-    gb_list = [CGP(am, ra, aa, ao=ao) for am in am_list[::-1] for aa in aa_list[1:]]
+    ga_list = [CGP.create_contraction(am, ra, aa, ao=ao) for am in am_list for aa in aa_list]
+    gb_list = [CGP.create_contraction(am, ra, aa, ao=ao) for am in am_list[::-1] for aa in aa_list[1:]]
     ga, gb = sum(ga_list), sum(gb_list)
     gab = CGPP(ga, gb)
     assert ao.abs(gab.pab - gab.pab[0]).max().item() == 0, "cannot test eri_self with non-uniform pab"
@@ -353,4 +384,3 @@ def test_eri_self(ao_eps):
     passed = perr == 0.0
     assert passed, f"fail eri_self %err: {perr:.4e}"
 #end def test_eri_self(ao_eps):
-
