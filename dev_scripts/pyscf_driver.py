@@ -94,6 +94,10 @@ def main():
         H = T + V
         eri_cart = pmol.intor("int2e_cart")
 
+        ao_label_path = os.path.join(outdir, f"ao_labels_{sample_tag}.txt")
+        with open(ao_label_path, 'w') as ofd:
+            for ao_label in pmol.ao_labels():
+                ofd.write(ao_label+'\n')
         np.save(os.path.join(outdir, f"S_{sample_tag}.npy"), S)
         np.save(os.path.join(outdir, f"H_{sample_tag}.npy"), H)
         np.save(os.path.join(outdir, f"ERI_{sample_tag}.npy"), eri_cart)

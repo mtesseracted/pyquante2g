@@ -9,6 +9,7 @@ from pyquante22.basis.basisset import (
     CartShellBatch,
     CartShellPair,
 )
+from pyquante22.basis.cart_gto_utils import cartPow2fullSym
 
 def ndindex(shape):
     """n-dim index generator"""
@@ -213,6 +214,12 @@ if __name__ == "__main__":    # simple smoke test
     rtol, atol = 1e-14, 1e-14
 
     for basis_name, sample_name in sample_list:
+        # if basis_name != "aug-cc-pvdz" or sample_name != "Water":
+        #     continue
+
+        sample_tag = sample_name.replace(" ", "_")
+        sample_tag += f"_{basis_name.replace('-', '')}"
+
         t0 = time.perf_counter()
         print(f"\n=== Sample: {sample_name}, Basis: {basis_name} ===")
         mol = load_sample_molecule(sample_name, aoi)
@@ -228,13 +235,37 @@ if __name__ == "__main__":    # simple smoke test
         t1 = time.perf_counter()
         print(f"Calcualted integrals in {t1-t0:.2f}s")
 
+        ref_ao_label_path = os.path.join(ref_tensor_path, f"ao_labels_{sample_tag}.txt")
+        with open(ref_ao_label_path, 'r') as ifd:
+            ref_ao_labels = ifd.read().splitlines()
 
+        bfs = basis.to_prims()
+        assert len(bfs) == len(ref_ao_labels), "Mismatch in len of AO labels"
 
-        sample_tag = sample_name.replace(" ", "_")
-        sample_tag += f"_{basis_name.replace('-', '')}"
+        for ii in range(len(bfs)):
+            bfa, bfb = str(bfs[ii]), ref_ao_labels[ii]
+            ama = cartPow2fullSym(bfs[ii].amom[0].tolist(), style='repeat')
+            amb = bfb.split()[-1][1:]
+            assert ama == amb, f"AO ordering mismatch, ours: {bfa}  // ref: {bfb}"
+            # print(f"{ii:02d} :: {amb} // {ama}")
+
+        name = 'S'
+        sa = _to_numpy(my_tensors[name])
+        sb = np.load(os.path.join(ref_tensor_path, f"{name}_{sample_tag}.npy"))
+        sn = 1/np.sqrt(np.diag(sb))
+
         for name in my_tensors.keys():
             tensor = _to_numpy(my_tensors[name])
             ref_tensor = np.load(os.path.join(ref_tensor_path, f"{name}_{sample_tag}.npy"))
+            if ref_tensor.ndim == 2:
+                ref_orig = ref_tensor
+                ref_tensor = np.einsum('i,ij,j->ij', sn, ref_tensor, sn)
+            elif ref_tensor.ndim == 4:
+                ref_orig = ref_tensor
+                ref_tensor = np.einsum('ijkl,i,j,k,l->ijkl', ref_tensor, *(sn,)*4)
+            
+            debug_var = 1
+
             if np.allclose(tensor, ref_tensor, rtol=rtol, atol=atol):
                 print(f"{name} matches reference.")
             else:

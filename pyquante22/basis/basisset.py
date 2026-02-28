@@ -86,11 +86,13 @@ class CartGtoContPair():
 class CartShell():
     """Cartesian Shell"""
     def __init__(self, amtot, cen, alphas, coeffs, ao=None,
-                 contraction_norm=True, primitive_norm=True):
+                 contraction_norm=True, primitive_norm=True,
+                 cart_order='pyscf'):
         self.amtot = amtot
         self.cen = cen
         self.contraction_norm = contraction_norm
         self.primitive_norm = primitive_norm
+        self.cart_order = cart_order
         self.ao = ao or arr.get_default_ops()
         if contraction_norm:
             coeffs = self._normalize_contracted_coeffs(
@@ -149,7 +151,7 @@ class CartShell():
         return self.bfs[idx]
 
     def to_prims(self):
-        am_list = gen_cartesian_momentums(self.amtot)
+        am_list = gen_cartesian_momentums(self.amtot, order=self.cart_order)
         ao = self.ao
         prims = []
         for am in am_list:
@@ -166,7 +168,7 @@ class CartShell():
         """all primitives in this shell as one CartGtoPrim"""
         if self.bfs_ is None:
             sz = len(self) # nbf * npf
-            am_list = gen_cartesian_momentums(self.amtot)
+            am_list = gen_cartesian_momentums(self.amtot, order=self.cart_order)
             amoms = self.ao.arr(am_list, dtype=self.ao.int_dtype)
             # amom is the slow index, necessary for later contraction
             amoms = self.ao.tile(amoms, (1,self.npf)).reshape(-1,3) 
@@ -184,6 +186,7 @@ class CartShellBatch():
     def __init__(self, shells=[]):
         self.shells = shells # List of CartShell
         self.ao = shells[0].ao if len(shells) > 0 else arr.get_default_ops()
+        self.cart_order = shells[0].cart_order if len(shells) > 0 else 'pyscf'
 
     def __len__(self): # nbf * npf (all possible primitives)
         return sum([len(s) for s in self.shells])
@@ -218,10 +221,14 @@ class CartShellBatch():
             coeffs = ao.zeros((sz,))
             icnt = 0
             am_tots = set([sh.amtot for sh in self.shells])
-            am_lists = {amt:gen_cartesian_momentums(amt) for amt in am_tots}
+            am_lists = {
+                (amt, order): gen_cartesian_momentums(amt, order=order)
+                for amt in am_tots
+                for order in {sh.cart_order for sh in self.shells if sh.amtot == amt}
+            }
             for sh in self.shells:
                 sz = len(sh)
-                ams = ao.arr(am_lists[sh.amtot], dtype=ao.int_dtype)
+                ams = ao.arr(am_lists[(sh.amtot, sh.cart_order)], dtype=ao.int_dtype)
                 amoms[icnt:icnt+sz] = ao.tile(ams, (1,sh.npf)).reshape(-1,3)
                 cens[icnt:icnt+sz] = ao.tile(sh.cen, (sz, 1))
                 alphas[icnt:icnt+sz] = ao.tile(sh.alphas, (sh.nbf,1)).reshape(-1)
@@ -405,12 +412,14 @@ class CartShellPair():
 #end class CartShellPair():
 
 class BasisSet():
-    def __init__(self, molecule, name='sto-3g', contraction_norm=True):
+    def __init__(self, molecule, name='sto-3g', contraction_norm=True,
+                 cart_order='pyscf'):
         self.molecule = molecule
         # self.bfs = []
         self.shells = []
         self.shell_range = []
         self.ao = molecule.ao
+        self.cart_order = cart_order
         ao = self.ao
 
         basis_dir = resources.files("pyquante22.basis").joinpath("cart_gto_data")
@@ -436,6 +445,7 @@ class BasisSet():
                 curr_shell = CartShell(
                     amtot, cen, alphas, coeffs, ao=ao,
                     contraction_norm=contraction_norm,
+                    cart_order=cart_order,
                 )
                 self.shells.append(curr_shell)
                 self.shell_range.append(

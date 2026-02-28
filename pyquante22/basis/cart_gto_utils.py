@@ -8,18 +8,30 @@ am2sym += [l for l in ABCs[ABCs.index('F') :] if l not in (am2sym + ['J'])]
 sym2am = dict(zip(am2sym, range(len(am2sym))))
 
 
-def cartPow2fullSym(am):
+def cartPow2fullSym(am, style='number'):
     if len(am) != 3:
         raise ValueError("Only valid for 3D momentums")
     j = sum(am)
     ret = am2sym[j].lower() if j < len(am2sym) else '@'
-    ret += ''.join(
-        [
-            (c + ('' if a == 1 else str(a)))
-            for c, a in zip(['x', 'y', 'z'], am)
-            if a != 0
-        ]
-    )
+    if style == 'number': # dx2 style
+        ret += ''.join(
+            [
+                (c + ('' if a == 1 else str(a)))
+                for c, a in zip(['x', 'y', 'z'], am)
+                if a != 0
+            ]
+        )
+    elif style == 'repeat': # dxx style
+        ret += ''.join(
+            [
+                c*a
+                for c, a in zip(['x', 'y', 'z'], am)
+                if a != 0
+            ]
+        )
+    else:
+        raise ValueError(f"Uknown style: {style}")
+
     return ret
 
 
@@ -60,16 +72,28 @@ def find_sum_triplets(n):
 # end def find_sum_triplets(n):
 
 
-def gen_cartesian_momentums(n):
-    trips = find_sum_triplets(n)
+def gen_cartesian_momentums(n, order='aaron'):
     nn = ((n + 1) * (n + 2)) // 2
     ret = np.full((nn, 3), -1)
 
-    ii = 0
-    for t in trips:
-        ts = sorted(set(permutations(t)), reverse=True)
-        ret[ii : ii + len(ts), :] = ts
-        ii += len(ts)
+    if order in ['perm_desc', 'aaron']:
+        trips = find_sum_triplets(n)
+        ii = 0
+        for t in trips:
+            ts = sorted(set(permutations(t)), reverse=True)
+            ret[ii : ii + len(ts), :] = ts
+            ii += len(ts)
+    
+    elif order in ['pyscf', 'lex',]:
+        ii = 0
+        for ix in range(n, -1, -1):
+            for iy in range(n - ix, -1, -1):
+                iz = n - ix - iy
+                ret[ii, :] = (ix, iy, iz)
+                ii += 1
+
+    else:
+        raise NotImplementedError()
 
     return ret
 # end def find_cartesian_momentums(n):
