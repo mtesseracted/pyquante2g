@@ -307,11 +307,12 @@ class CartShellPair():
         gi, gj, gk, gl = self.bfs.ga, self.bfs.gb, other.bfs.ga, other.bfs.gb
         coeffs = gi.coeffs, gj.coeffs, gk.coeffs, gl.coeffs
         axis_counts = (
-            self._axis_counts(self.si),
-            self._axis_counts(self.sj),
-            self._axis_counts(other.si),
-            self._axis_counts(other.sj),
+            self.ao.arr(self._axis_counts(self.si), dtype=self.ao.int_dtype),
+            self.ao.arr(self._axis_counts(self.sj), dtype=self.ao.int_dtype),
+            self.ao.arr(self._axis_counts(other.si), dtype=self.ao.int_dtype),
+            self.ao.arr(self._axis_counts(other.sj), dtype=self.ao.int_dtype),
         )
+        debug_var = 1
         return self.eri_contraction_ragged(
             eri_prims,
             axis_counts=axis_counts,

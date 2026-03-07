@@ -24,11 +24,16 @@ class TorchBackend(ArrayBackend):
             return t.to(self.device)
         return t
 
+
     def zeros(self, shape, dtype=None):
         dtype = dtype if dtype else self.default_dtype
-        if self.device is not None:
-            return torch.zeros(shape, dtype=dtype, device=self.device)
-        return torch.zeros(shape, dtype=dtype)
+        return torch.zeros(shape, dtype=dtype, device=self.device)
+
+
+    def ones(self, shape, dtype=None):
+        dtype = dtype if dtype else self.default_dtype
+        return torch.ones(shape, dtype=dtype, device=self.device)
+
 
     def arange(self, start, stop=None, step=1, dtype=None):
         if dtype is None:
@@ -169,6 +174,10 @@ class TorchBackend(ArrayBackend):
     def eigh(self, x):
         return torch.linalg.eigh(x)
 
+    def eye(self, n, device=None, **kwargs):
+        if device is None:
+            device = self.device
+        return torch.eye(n, device=device, **kwargs)
 
 #end class TorchBackend(ArrayBackend):
 

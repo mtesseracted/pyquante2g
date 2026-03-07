@@ -287,3 +287,247 @@ if False:
 
         return ret3 # @DEBUG
         # return ret
+
+
+##################################################################################################
+# the main section of cart_gto.py on 02Mar26, when switching to GPU
+##################################################################################################
+if False:
+    loops = 100
+    t0 = time.time()
+    for _ in range(loops):
+        cas = gp12.calc_c_array(gp12)
+    t1 = time.time()
+    print(f"orig method took {t1-t0:.4f}s for {loops} loops")
+
+    t0 = time.time()
+    for _ in range(loops):
+        cbs = gp12.calc_c_self()
+    t1 = time.time()
+    print(f"new method took {t1-t0:.4f}s for {loops} loops")
+
+    for i in range(len(cas)):
+        minl = cbs[i].shape[-1]
+        extra = cas[i][:,:,minl:]
+        if extra.nelement() > 0:
+            assert aoi.abs(extra).max() == 0, f"nonzero extra in c array {i}"
+        assert aoi.abs(cas[i][:,:,:minl] - cbs[i]).max() < 1e-16, "c array self mismatch"
+
+
+    # gp1 = sum([gna, gs, gmc, goa]) # needs check_valid in calc_eri_self
+    gp1 = sum([gnb, gsb, gmb, gob])
+    gp2 = sum([gsb, gnb, gob, gmb])
+    gp12 = gp1 * gp2
+
+    loops = 100
+    t0 = time.time()
+    for _ in range(loops):
+        eas = gp12.calc_eri(gp12)
+    t1 = time.time()
+    print(f"orig method took {t1-t0:.4f}s for {loops} loops")
+
+    t0 = time.time()
+    for _ in range(loops):
+        ebs = gp12.calc_eri_self()
+    t1 = time.time()
+    print(f"new method took {t1-t0:.4f}s for {loops} loops")
+
+    assert aoi.abs(eas - ebs).max() < 1e-16, "eri self mismatch"
+
+
+    # loops = 500
+    # t0 = time.time()
+    # for _ in range(loops):
+    #     gab = sum(gp_list) * sum(gp_list[-2::-1])
+    # t1 = time.time()
+    # print(f"{loops} inits took {t1-t0:.4f}s")
+
+
+    # one body ops test:
+    gab = sum(gp_list) * sum(gp_list[-2::-1])
+    methods = ["calc_overlap1d", "calc_overlap", "calc_kinetic", "calc_h_array"]
+    results = [getattr(gab, f)() for f in methods]
+    results = [getattr(gab, f)() for f in methods] # call twice to make sure data isn't corrupted
+
+    for i,j in ndindex(gab.shape):
+        gabl = tolegacy(gab[i,j])
+        for ii, f in enumerate(methods):
+            gt = getattr(gabl, f)()
+            ans = results[ii][i,j]
+            gshap, ashap = gt.shape, ans.shape
+            if gt.nelement() < 2:
+                a, b = ans.item(), gt.item()
+                if b == 0:
+                    assert a == b
+                else:
+                    assert aoi.abs((gt-ans)/gt).item() < 1e-15
+                continue
+            assert len(gshap) == len(ashap), "ndim mismatch"
+            min_shape = tuple(min(a, b) for a, b in zip(gt.shape, ans.shape))
+            overlap_slices = tuple(slice(0, m) for m in min_shape)
+            gt2 = gt[overlap_slices]
+            an2 = ans[overlap_slices]
+            assert aoi.sum(aoi.abs(an2-gt2)) == 0.0, f"mismatch in {f}"
+            mask = aoi.ones(min_shape, dtype=bool)
+            if min_shape != gt.shape: # check extras
+                gt[overlap_slices] = 0
+                assert aoi.abs(aoi.sum(gt)) == 0, f"gt extras not 0 {f}"
+            if min_shape != ans.shape: # check extras
+                ans[overlap_slices] = 0
+                assert aoi.abs(aoi.sum(ans)) == 0, f"ans extras not 0 {f}"
+
+            debug_var = 1
+
+
+    # two body ops test:
+    gp4 = sum(gp_list[:4])
+    gp3 = sum(gp_list[4:7])
+    gp2 = sum(gp_list[:-3:-1])
+    gp1 = sum(gp_list[-2:-3:-1])
+    gab, gcd = gp2*gp3, gp1*gp4
+    rcens = gcd.pab.reshape(-1, gcd.nd)
+
+
+    methods = ["calc_a_array", "calc_nai",]
+    results = [getattr(gab, f)(rcens) for f in methods]
+    results = [getattr(gab, f)(rcens) for f in methods] # call twice to make sure data isn't corrupted
+
+    for i,j in ndindex(gab.shape):
+        gabl = tolegacy(gab[i,j])
+        for k in range(rcens.shape[0]):
+            for ii, f in enumerate(methods):
+                gt = getattr(gabl, f)(rcens[k])
+                ans = results[ii][i,j,k]
+                gshap, ashap = gt.shape, ans.shape
+                if gt.nelement() < 2:
+                    assert gt.item() == ans.item()
+                    continue
+                assert len(gshap) == len(ashap), "ndim mismatch"
+                min_shape = tuple(min(a, b) for a, b in zip(gt.shape, ans.shape))
+                overlap_slices = tuple(slice(0, m) for m in min_shape)
+                gt2 = gt[overlap_slices]
+                an2 = ans[overlap_slices]
+                assert aoi.sum(aoi.abs(an2-gt2)) == 0.0, f"mismatch in {f}"
+                mask = aoi.ones(min_shape, dtype=bool)
+                if min_shape != gt.shape: # check extras
+                    gt[overlap_slices] = 0
+                    assert aoi.abs(aoi.sum(gt)) == 0, f"gt extras not 0 {f}"
+                if min_shape != ans.shape: # check extras
+                    ans[overlap_slices] = 0
+                    assert aoi.abs(aoi.sum(ans)) == 0, f"ans extras not 0 {f}"
+
+                debug_var = 1
+
+
+    methods = ["calc_c_array", "calc_eri",]
+    results = [getattr(gab, f)(gcd) for f in methods]
+    results = [getattr(gab, f)(gcd) for f in methods] # call twice to make sure data isn't corrupted
+
+    for i,j in ndindex(gab.shape):
+        gabl = tolegacy(gab[i,j])
+        for k, l in ndindex(gcd.shape):
+            gcdl = tolegacy(gcd[k,l])
+
+            for ii, f in enumerate(methods):
+                gt = getattr(gabl, f)(gcdl)
+                if f == "calc_c_array": # handle list output
+                    stack = aoi.stack(results[ii], axis=0)
+                    ans = stack.reshape(gab.nd, *gab.shape, *gcd.shape, -1)[:,i,j,k,l]
+                else:
+                    ans = results[ii][i,j,k,l]
+                if gt.nelement() < 2:
+                    assert gt.item() == ans.item()
+                    continue
+
+                gshap, ashap = gt.shape, ans.shape
+                assert len(gshap) == len(ashap), "ndim mismatch"
+
+                min_shape = tuple(min(a, b) for a, b in zip(gt.shape, ans.shape))
+                overlap_slices = tuple(slice(0, m) for m in min_shape)
+                gt2 = gt[overlap_slices]
+                an2 = ans[overlap_slices]
+                assert aoi.xp.allclose(an2, gt2, rtol=1e-14, atol=1e-16), f"mismatch in {f}"
+                # assert aoi.sum(aoi.abs(an2-gt2)) == 0.0, f"mismatch in {f}"
+
+
+                mask = aoi.ones(min_shape, dtype=bool)
+                if min_shape != gt.shape: # check extras
+                    gt[overlap_slices] = 0
+                    assert aoi.abs(aoi.sum(gt)) == 0, f"gt extras not 0 {f}"
+                if min_shape != ans.shape: # check extras
+                    ans[overlap_slices] = 0
+                    assert aoi.abs(aoi.sum(ans)) == 0, f"ans extras not 0 {f}"
+
+                debug_var = 1
+
+    debug_var = 2
+
+    # CartGtoPrim (Lx,Ly,Lz) (Rx,Ry,Rz) Exp
+    # 4  2  0        0.0000       0.5000      -0.2500    2.0000e+00, 
+    # CartGtoPrim (Lx,Ly,Lz) (Rx,Ry,Rz) Exp
+    # 0  0  0        0.1250       0.1250       0.1250    1.0000e+00
+    ama = aoi.arr([4, 2, 0], dtype=aoi.int_dtype)
+    amb = aoi.arr([0, 0, 0], dtype=aoi.int_dtype)
+    ra = aoi.arr([0, 0.5, -0.25])
+    rb = aoi.arr([0.125, 0.125, 0.125])
+    aa = aoi.arr([2.0])
+    ab = aoi.arr([1.0])
+    ga = CartGtoPrim(ama, ra, aa, ao=aoi, co=coi)
+    gb = CartGtoPrim(amb, rb, ab, ao=aoi, co=coi)
+    gab = CartGtoPrimPair(ga, gb)
+    ans = gab.calc_kinetic().item()
+    gabl = tolegacy(gab)
+    ref = gabl.calc_kinetic().item()
+
+    import numpy as np
+    import pyquante22.arb_math as arb
+    from pyquante22.ref_ints.utils import GTO
+
+
+    def to_np(a):  # to numpy
+        if hasattr(a, "shape"):
+            return np.asarray(a.tolist())
+        return np.asarray(a.item())
+
+    def cgp_scalar(gto: CGP):
+        l = to_np(gto.amom)
+        r = to_np(gto.cen)
+        if hasattr(l, "ndim") and l.ndim == 2:
+            l = l[0]
+        if hasattr(r, "ndim") and r.ndim == 2:
+            r = r[0]
+        return l, r, to_np(gto.alpha[0])
+
+
+    def gto2arb(gto):
+        if isinstance(gto, GTO):
+            l = arb.arr_init(gto.l.tolist())
+            r = arb.arr_init(gto.r.tolist())
+            a = arb.arb(gto.a.item())
+            return [a, l, r]
+        elif isinstance(gto, CGP):
+            l, r, a = cgp_scalar(gto)
+            return gto2arb(GTO(l=l, r=r, a=a))
+        else:
+            raise ValueError(f"Does not support type {type(gto)}")
+
+    def kin_ref(*args):
+        """Kinetic reference, args is one CartGtoPrimPair"""
+        ab = args[0]  # one CGPP
+        la, ra, aa = cgp_scalar(ab.ga)
+        lb, rb, abeta = cgp_scalar(ab.gb)
+        a = GTO(l=la, r=ra, a=aa)
+        b = GTO(l=lb, r=rb, a=abeta)
+        fargs = sum([gto2arb(g) for g in [a, b]], [])
+        return arb.kinetic_tho66(*fargs)
+
+    gt = float(kin_ref(gab))
+
+    err1 = (ans - ref) /ref
+    err2 = (ref - gt) / gt
+    err3 = (ans - gt) / gt
+    print(f"{coi.amax} {err1:.4e} {err2:.4e} {err3:.4e}")
+
+    debug_var = 1
+
+ 

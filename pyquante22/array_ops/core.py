@@ -21,6 +21,7 @@ math_ops_binary = [
 reduction_ops = [
     "sum", "prod",
     "amax", "amin",
+    "any", "all",
 ]
 creation_ops = ["eye",]
 manipulation_ops = [
@@ -40,6 +41,8 @@ misc_ops = [
     "conv1d",
     "segment_sum",
     "diag",
+    "allclose",
+    "broadcast_shapes",
 ]
 basic_ops = sum([
     math_ops_unary, 
