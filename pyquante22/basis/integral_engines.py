@@ -357,7 +357,7 @@ def _to_numpy(x):
 
 def mismatch_summary(name, tensor, ref_tensor, RTOL=1e-14, ATOL=1e-16):
     a = _to_numpy(tensor)
-    b = ref_tensor
+    b = _to_numpy(ref_tensor)
     if np.allclose(a, b, rtol=RTOL, atol=ATOL):
         return None
 
@@ -405,58 +405,66 @@ if __name__ == "__main__":    # simple smoke test
     aog = arr.ArrayOps(
         "torch", device="cuda:0", default_dtype="float64", int_dtype="int64"
     )
+    ao_dict = dict(cpu=aoc, gpu=aog)
 
     sample_molecules = ["Hydrogen", "LiH", "Water", "Methane",]# "Carbon Monoxide", "Carbon Dioxide", "Propane"]
     sample_bases = ["sto-3g", "6-31g", "aug-cc-pvdz"]
-    sample_list = [(sample_bases[0], mol) for mol in sample_molecules[:3]]
+    sample_list = []
+    # sample_list += [(sample_bases[0], mol) for mol in sample_molecules[:3]]
     # sample_list += [(sample_bases[1], mol) for mol in sample_molecules[1:]]
-    # sample_list += [(sample_bases[2], mol) for mol in sample_molecules[:1]]
+    sample_list += [(sample_bases[2], mol) for mol in sample_molecules[:]]
 
     tensor_names = ['S', 'H', 'ERI']
     ref_tensor_path = "dev_scripts/tmp"
     rtol, atol = 1e-14, 1e-14
 
     sample_nbfs, sample_nels = [], []
+    max_nbf = int(1400 ** 0.5)
 
     for basis_name, sample_name in sample_list:
         # if basis_name != "aug-cc-pvdz" or sample_name != "Water":
         #     continue
-
         sample_tag = sample_name.replace(" ", "_")
         sample_tag += f"_{basis_name.replace('-', '')}"
-
-        t0 = time.perf_counter()
         print(f"\n=== Sample: {sample_name}, Basis: {basis_name} ===")
-        mol = load_sample_molecule(sample_name, aoc)
-        basis = BasisSet(mol, name=basis_name)
-        print(f"Using sample molecule: {mol} // {basis}")
-        sample_nbfs.append(basis.nbf)
-        sample_nels.append(mol.nel())
 
-        t0 = time.perf_counter()
-        ie = IntegralEngineBase(basis)
-        t1 = time.perf_counter()
-        s, t, v = ie.build_one_electron_matrices()
-        h = t + v
-        t2 = time.perf_counter()
-        dens0 = guess_density_from_core(h, s, mol.nclosed(), aoc)
-        t3 = time.perf_counter()
-        print(f"IE init: {t1-t0:.2f}s 1Es: {t2-t1:.2f}s D0: {t3-t2:.2f}")
+        for device, aoi in ao_dict.items():
+            t0 = time.perf_counter()
+            mol = load_sample_molecule(sample_name, aoi)
+            basis = BasisSet(mol, name=basis_name)
+            if device == 'cpu': print(f"Using sample molecule: {mol} // {basis}")
+            if basis.nbf > max_nbf:
+                print(f"skipping because basis is too large (>{max_nbf})")
+                continue
+            # if device == 'cpu': continue # @debug
+            sample_nbfs.append(basis.nbf)
+            sample_nels.append(mol.nel())
 
-        t0 = time.perf_counter()
-        eri4da = ie.build_eri_4d_batch(batch_size=2**20)
-        t1 = time.perf_counter()
-        print(f"Time to batch dense 4d eri: {t1-t0:.2f}s")
+            t0 = time.perf_counter()
+            ie = IntegralEngineBase(basis)
+            t1 = time.perf_counter()
+            s, t, v = ie.build_one_electron_matrices()
+            h = t + v
+            t2 = time.perf_counter()
+            dens0 = guess_density_from_core(h, s, mol.nclosed(), aoc)
+            t3 = time.perf_counter()
+            print(f"{device} // IE init: {t1-t0:.2f}s 1Es: {t2-t1:.2f}s D0: {t3-t2:.2f}")
 
-        # t0 = time.perf_counter()
-        # eri4db = ie.build_eri_4d_sh()
-        # t1 = time.perf_counter()
-        # # j0b = aoc.einsum('ijkl,kl', eri4db, dens0)
-        # # t2 = time.perf_counter()
-        # print(f"Time to build dense 4d eri: {t1-t0:.2f}s")
+            t0 = time.perf_counter()
+            eri4da = ie.build_eri_4d_batch(batch_size=2**20)
+            t1 = time.perf_counter()
+            print(f"{device} // Time to batch dense 4d eri: {t1-t0:.2f}s")
 
-        # details = mismatch_summary("eri", eri4da, eri4db)
-        # if details: 
-        #     print(details)
+            t0 = time.perf_counter()
+            eri4db = ie.build_eri_4d_sh()
+            t1 = time.perf_counter()
+            # j0b = aoc.einsum('ijkl,kl', eri4db, dens0)
+            # t2 = time.perf_counter()
+            print(f"{device} // Time to build dense 4d eri: {t1-t0:.2f}s")
+
+            details = mismatch_summary("eri", eri4da, eri4db)
+            if details: 
+                print(details)
+            debug_var =1 
 
     debug_var = 1

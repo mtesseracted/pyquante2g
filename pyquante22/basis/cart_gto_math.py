@@ -66,16 +66,19 @@ class CachedOps:
 
 
 class GtoMath:
+    """Numerical math functions needed for GTO calculations
+    NB: all the specific boys functions expect args shapes of m: (1,M); x: (B,1)
+    """
     def __init__(self, ao=None):
         self.ao = ao or arr.get_default_ops()
         self.ArrType = self.ao.ArrayType
+
         if 'float32' in str(self.ao.default_dtype):
             self.fboys = self.fboys_float32
         elif 'float64' in str(self.ao.default_dtype):
             self.fboys = self.fboys_float64
         else:
             self.fboys = self.fboys_igamma 
-
 
 
     def pow_ladder(self, x_G, L: int):
@@ -93,7 +96,37 @@ class GtoMath:
         return ao.concat([ones, tail], axis=1)                       # (G,L)
 
 
-    def fboys_float32(self, m, x):  # stable @ x=0
+    def triple_conv_dot(self, ax, ay, az, fxyz, preflip=False):
+        """ans[:] = sum_{i,j,k} ax[:,i] ay[:,j] az[:,k] fxyz[:,i+j+k]
+        preflip indicates whether az has been flipped along axis=1
+        """
+        ao = self.ao
+        B, nx = ax.shape
+        ny = ay.shape[1]
+        nz, nf = az.shape[1], fxyz.shape[1]
+
+        # ---- k = ay * az (true convolution) ----
+        # input: (1, B, ny), weight: (B, 1, nz), groups=B
+        w1 = ao.reshape(az if preflip else ao.flip(az, axis=-1), (B, 1, nz))
+        x1 = ao.reshape(ay, (1, B, ny))
+        k = ao.conv1d(x1, w1, groups=B, padding=nz - 1)[0]  # (B, ny+nz-1)
+        nk = k.shape[1]
+
+        # ---- correlate f with k but compute only first nx outputs ----
+        need_len = nx + nk - 1  # f coverage needed for first nx outputs
+        take = min(nf, need_len)
+        right_pad = need_len - take  # only pad on the right if short
+
+        x2 = ao.reshape(fxyz[:, :take], (1, B, take))
+        if right_pad:
+            x2 = ao.pad(x2, ((0, 0), (0, 0), (0, right_pad)))
+        w2 = ao.reshape(k, (B, 1, nk))
+        c = ao.conv1d(x2, w2, groups=B)[0]  # (B, nx) exactly
+
+        return ao.einsum("ij,ij->i", ax, c)
+
+
+    def fboys_float32(self, m, x):  # 
         """boys function for float32 piecewise splits"""
         ao = self.ao
         xsw, msw = 0.5, 26
@@ -120,7 +153,7 @@ class GtoMath:
         return ret
 
 
-    def fboys_float64(self, m, x):  # stable @ x=0
+    def fboys_float64(self, m, x):  # 
         """boys function for float64 piecewise splits"""
         ao = self.ao
         xsw = 0.1
@@ -134,71 +167,33 @@ class GtoMath:
         return ret
 
 
-    def triple_conv_dot(self, ax, ay, az, fxyz, preflip=False):
-        """ans[:] = sum_{i,j,k} ax[:,i] ay[:,j] az[:,k] fxyz[:,i+j+k]
-        preflip indicates whether az has been flipped along axis=1
-        """
-        B, nx = ax.shape
-        nz, nf = az.shape[1], fxyz.shape[1]
-
-        # ---- k = ay * az (true convolution) ----
-        # input: (1, B, ny), weight: (B, 1, nz), groups=B
-        w1 = (az if preflip else az.flip(-1)).unsqueeze(1)  # (B,1,nz)
-        x1 = ay.unsqueeze(0)  # (1,B,ny)
-        k = self.ao.conv1d(x1, w1, groups=B, padding=nz - 1).squeeze(0)  # (B, ny+nz-1)
-        nk = k.size(1)
-
-        # ---- correlate f with k but compute only first nx outputs ----
-        need_len = nx + nk - 1  # f coverage needed for first nx outputs
-        take = min(nf, need_len)
-        right_pad = need_len - take  # only pad on the right if short
-
-        x2 = fxyz[:, :take].unsqueeze(0)  # (1,B,take)
-        if right_pad:
-            x2 = self.ao.pad(x2, (0, right_pad))  # asymmetric pad (left=0, right)
-        w2 = k.unsqueeze(1)  # (B,1,nk)
-        c = self.ao.conv1d(x2, w2, groups=B).squeeze(0)  # (B, nx) exactly
-
-        return self.ao.einsum("ij,ij->i", ax, c)
-
-    def fboys_igamma(self, m, x):  # unstable @ x=0
-        """boys function"""
+    def fboys_igamma(self, m, x):  # unstable @ x=0 and large m
+        """boys function using incomplete gamma func"""
         m2 = m + 0.5 * self.ao.arr(1)
         # ret = 0.5 * pow(x, -m2) * self.ao.gamma_inc(m2, x)
         ret = 0.5 / (x ** m2) * self.ao.gamma_inc(m2, x)
         return ret
 
-    def fboys_m0(self, x):
-        """boys func for m=0 (not stable near x=0)"""
-        ao, xp = self.ao, self.ao.xp
-        sqpi = ao.sqrt(ao.arr(xp.pi))
-        sqx = ao.sqrt(x)
-        return sqpi / (2*sqx) * xp.erf(sqx)
 
-
-    def fboys_ligamma(self, m, x): 
+    def fboys_ligamma(self, m, x): # unstable @ x=0
+        """boys func with log-incomplete gamma"""
         ao = self.ao
-        m2 = m + 0.5 * self.ao.arr(1)
-        lg = ao.log(ao.gamma_inc(m2, x))
-        return 0.5 *self.ao.exp(lg - m2*ao.log(x))
+        m2 = m + 0.5
+        lg = ao.log(ao.gamma_inc(m2, x)) # hacky! should use dedicated log_igamma  
+        return 0.5 *ao.exp(lg - m2*ao.log(x))
  
     
-    def fboys_series(self, m, x, max_terms=8):
-        """series expansion at x=0"""
+    def fboys_series(self, m, x, max_terms=8): # unstable for x >= 1
+        """Taylor series expansion at x=0"""
         ao = self.ao
         a = m + 0.5
-        full_sz = x.shape[0], m.shape[1]
         term = ao.ones(x.shape) # n = 0 term
-        s = self.ao.broadcast_to(term / a, full_sz)
+        s = term / a
 
         for k in range(1, max_terms): #
             term *= -x / k
             s += term / (a+k)
         return 0.5 * s
-
-
-    def fboys_series8(self, m, x):
-        return self.fboys_series(m, x, max_terms=8)
 
 
     def fboys_series8_unrolled(self, m, x):
@@ -241,39 +236,60 @@ class GtoMath:
         return 0.5 * s
 
 
-    def fboys_series_xa(self, m, x, x0, fx0_terms, max_terms):
-        """Taylor expansion around x0 using precomputed fx0_terms[n] = F_n(x0)."""
+    def fboys_series_xa(self, m, x, x0, fx0_terms):
+        """Taylor series around x0 using precomputed fx0_terms[n] = F_n(x0)."""
         ao = self.ao
-        assert max_terms >= 1, "max_terms must be >= 1"
-
         shp = x.shape
         xx = x.reshape(-1)
         idx = ao.arr(m.reshape(-1), dtype=ao.int_dtype)
+        mmax = int(ao.amax(idx).item())
+        idx = ao.minimum(ao.maximum(idx, ao.arr(0, dtype=ao.int_dtype)), ao.arr(mmax, dtype=ao.int_dtype))
+
+        f0 = ao.arr(fx0_terms, dtype=xx.dtype)
+        max_terms = int(f0.shape[0]) - mmax
+        if max_terms < 1:
+            raise ValueError(f"fx0_terms needs at least {mmax + 1} entries for max m={mmax}; got {int(f0.shape[0])}")
+        need = mmax + max_terms
+        c = f0[:need][idx[:, None] + ao.arange(max_terms, dtype=ao.int_dtype)[None, :]]
+
+        s = c[:, -1]
+        dx = xx - ao.arr(float(x0), dtype=xx.dtype)
+        for i in range(max_terms - 2, -1, -1):
+            s = c[:, i] - dx * s / ao.arr(i + 1.0, dtype=dx.dtype)
+        return s.reshape(shp)
+
+
+    def fboys_m0(self, x): # unstable near x=0
+        """boys func for m=0 (not stable near x=0)"""
+        ao, xp = self.ao, self.ao.xp
+        sqpi = ao.sqrt(ao.arr(4) * ao.atan(ao.arr(1)))
+        sqx = ao.sqrt(x)
+        return sqpi / (2*sqx) * xp.erf(sqx)
+
+
+    def fboys_upward(self, m, T):
+        """upward recursion from m=0"""
+        ao = self.ao
+        shp = T.shape
+        t = T.reshape(-1)
+        idx = ao.arr(m.reshape(-1), dtype=ao.int_dtype)
+
         mmax = int(ao.amax(idx).item())
         idx = ao.minimum(
             ao.maximum(idx, ao.arr(0, dtype=ao.int_dtype)),
             ao.arr(mmax, dtype=ao.int_dtype),
         )
 
-        need = mmax + max_terms
-        f0 = ao.arr(fx0_terms, dtype=xx.dtype).reshape(-1)
-        if int(f0.shape[0]) < need:
-            raise ValueError(f"fx0_terms needs at least {need} entries; got {int(f0.shape[0])}")
-        f0 = f0[:need]
+        f0 = self.fboys_m0(t)
+        expmt, inv2t = ao.exp(-t), 0.5 / t
 
-        k = ao.arange(max_terms, dtype=ao.int_dtype)
-        c = f0[idx[:, None] + k[None, :]]
+        F = ao.zeros((mmax + 1, t.shape[0]), dtype=t.dtype)
+        F[0] = f0
+        for k in range(mmax):
+            F[k + 1] = ((2.0 * k + 1.0) * F[k] - expmt) * inv2t
 
-        dx = xx - ao.arr(float(x0), dtype=xx.dtype)
-        p = ao.xp.ones_like(dx)
-        s = ao.xp.zeros_like(dx)
-        sign, fact = 1.0, 1.0
-        for i in range(max_terms):
-            s += sign * c[:, i] * p / fact
-            p *= dx
-            sign = -sign
-            fact *= (i + 1.0)
-        return s.reshape(shp)
+        col = ao.arange(t.shape[0], dtype=ao.int_dtype)
+        return F[idx, col].reshape(shp)
 
 
     def fboys_miller(self, m, T, m_margin=2, t_margin=2):
@@ -308,34 +324,11 @@ class GtoMath:
         col = ao.arange(n, dtype=ao.int_dtype)
         return F[idx, col].reshape(shp)
 
-    def fboys_upward(self, m, T):
-        ao = self.ao
-        shp = T.shape
-        t = T.reshape(-1)
-        idx = ao.arr(m.reshape(-1), dtype=ao.int_dtype)
-
-        mmax = int(ao.amax(idx).item())
-        idx = ao.minimum(
-            ao.maximum(idx, ao.arr(0, dtype=ao.int_dtype)),
-            ao.arr(mmax, dtype=ao.int_dtype),
-        )
-
-        f0 = 0.5 * ao.sqrt(ao.arr(ao.xp.pi, dtype=t.dtype)) * ao.xp.erf(ao.sqrt(t)) / ao.sqrt(t)
-        e = ao.exp(-t)
-        inv2t = 0.5 / t
-        n = t.shape[0]
-
-        F = ao.zeros((mmax + 1, n), dtype=t.dtype)
-        F[0] = f0
-        for k in range(mmax):
-            F[k + 1] = ((2.0 * k + 1.0) * F[k] - e) * inv2t
-
-        col = ao.arange(n, dtype=ao.int_dtype)
-        return F[idx, col].reshape(shp)
-
-    
+   
     def fboys_large_m(self, m, x, max_terms=12):
-        """large M series"""
+        r"""asymptotic large-m expansion
+        f_m(x) = e^{-x} / (2m+1) \sum_k=0 x^k / \prod_{j=1}^k (m+1/2+j)
+        """
         ao = self.ao
         m2 = m + 0.5
         ret = 0.5 * ao.exp(-x) / m2
@@ -348,6 +341,8 @@ class GtoMath:
             s += term
 
         return ret * s
+
+#end class GtoMath:
 
 
 if __name__ == "__main__":
@@ -450,31 +445,50 @@ if __name__ == "__main__":
     x_vals = aoi.concat(xsubsets)
     # x_vals = aoi.arange(201).to(aoi.default_dtype)
     nrng = aoi.arange(64)
-    am.set_prec(100) # 100 decimal points
-    series_x0p5_terms = 16
-    series_x0p5 = 0.1
-
-    max_m_eval = int(_to_numpy(nrng).max())
-    f1_exact_x0p5 = np.array(
-        [float(am.fboys(mm, series_x0p5)) for mm in range(max_m_eval + series_x0p5_terms)],
-        dtype=np.float64,
-    )
-
-    def fboys_series_x0p5(m, x):
-        return gm.fboys_series_xa(
-            m,
-            x,
-            x0=series_x0p5,
-            fx0_terms=f1_exact_x0p5,
-            max_terms=series_x0p5_terms,
-        )
-
     X, A = aoi.xp.meshgrid(x_vals, nrng.to(x_vals), indexing="ij")
+
+
+    ## use the arbitrary precision calculator for ground truth
+    am.set_prec(16) # 
     exact_vec = np.vectorize(am.fboys)
-    f_exact = exact_vec(A, X).astype(np.float64)
+    f_exact_old = exact_vec(A, X).astype(np.float64)
+    print(f"Finding precision needed for exact cacluations with arbitrary precision on the numerical grid")
+    print(f"precision | diff_count | nz_diff_max | nz_diff_median | nz_diff_mean")
+    for prec in range(24, 1024, 8):
+        am.set_prec(prec) # 
+        exact_vec = np.vectorize(am.fboys)
+        f_exact = exact_vec(A, X).astype(np.float64)
+        if np.all(f_exact == f_exact_old):
+            print(f"Exact match found between prec={prec} and previous setting")
+            break
+        debug_var = 1
+        diffs = f_exact_old - f_exact
+        nzids = np.where(diffs != 0)
+        diff_count = len(nzids[0])
+        nzdiffs = np.abs(diffs[nzids])
+        print(f"{prec:d}\t{diff_count}\t{nzdiffs.max():.4e}\t{np.median(nzdiffs):.4e}\t{nzdiffs.mean():.4e}")
+        f_exact_old = f_exact
+
     gt = aoi.arr(f_exact) 
     assert aoi.sum(gt < 0).item() == 0, f"This should always be non-negative" # 0 possible from rounding
     assert aoi.sum(gt > 1+EPS).item() == 0, f"Should be bounded by 1.0"
+
+
+    if False: # series expansion around a point, use arb_math for the coefficients
+        series_x0p5_terms = 16
+        series_x0p5 = 0.1
+        max_m_eval = int(_to_numpy(nrng).max())
+        f1_exact_x0p5 = np.array(
+            [float(am.fboys(mm, series_x0p5)) for mm in range(max_m_eval + series_x0p5_terms)],
+            dtype=np.float64,
+        )
+        def fboys_series_x0p5(m, x):
+            return gm.fboys_series_xa(
+                m,
+                x,
+                x0=series_x0p5,
+                fx0_terms=f1_exact_x0p5,
+            )
 
     # eval funcs and their errors
     boys_funcs = [
@@ -485,7 +499,7 @@ if __name__ == "__main__":
         gm.fboys_igamma, 
         # gm.fboys_ligamma,
         gm.fboys_large_m,
-        # gm.fboys, # test overloading working
+        # gm.fboys, # test overloading is working
     ]
     time_loops = int(10**3)
     mb, xb = nrng[None,:].to(x_vals), x_vals[:,None]
@@ -550,24 +564,25 @@ if __name__ == "__main__":
     plt.show()
 
 
-    # # search piecewise switches
-    # search = {}
-    # for msw in range(1): #range(18, 31):
-    #     for xsw in [0.1, 0.2, 0.5, 1.0]:
-    #         funcs = [gm.fboys_series8, gm.fboys_igamma, gm.fboys_large_m]
-    #         pw_error_grid = np.full_like(error_grids[0], 10**4)
-    #         mask0 = X < xsw
-    #         pw_error_grid[mask0] = error_grids[0][mask0]
-    #         # mask2 = A > msw
-    #         # pw_error_grid[mask2] = error_grids[2][mask2]
-    #         mask1 = ~mask0 # & ~mask2
-    #         pw_error_grid[mask1] = error_grids[1][mask1]
-    #         search[(xsw, msw)] = pw_error_grid.max()
-    #         print(f"({xsw}, {msw}) : {pw_error_grid.max():.4e}  {pw_error_grid.mean():.4e}  {np.median(pw_error_grid):.4e}")
+    # search piecewise switch points
+    if False:
+        search = {}
+        for msw in range(1): #range(18, 31):
+            for xsw in [0.1, 0.2, 0.5, 1.0]:
+                funcs = [gm.fboys_series8, gm.fboys_igamma, gm.fboys_large_m]
+                pw_error_grid = np.full_like(error_grids[0], 10**4)
+                mask0 = X < xsw
+                pw_error_grid[mask0] = error_grids[0][mask0]
+                # mask2 = A > msw
+                # pw_error_grid[mask2] = error_grids[2][mask2]
+                mask1 = ~mask0 # & ~mask2
+                pw_error_grid[mask1] = error_grids[1][mask1]
+                search[(xsw, msw)] = pw_error_grid.max()
+                print(f"({xsw}, {msw}) : {pw_error_grid.max():.4e}  {pw_error_grid.mean():.4e}  {np.median(pw_error_grid):.4e}")
 
     if aoi.xp.finfo(aoi.default_dtype).dtype == 'float32':
         xsw, msw = 0.5, 26
-        funcs = [gm.fboys_series8, gm.fboys_igamma, gm.fboys_large_m]
+        funcs = [gm.fboys_series, gm.fboys_igamma, gm.fboys_large_m]
         _, pw_grids, _, _, _ = eval_error_grids(
             funcs, mb, xb, gt, EPS, loops=1, print_times=False
         )
@@ -582,7 +597,7 @@ if __name__ == "__main__":
 
     elif aoi.xp.finfo(aoi.default_dtype).dtype == 'float64':
         xsw = 0.1
-        funcs = [gm.fboys_series8, gm.fboys_igamma,]
+        funcs = [gm.fboys_series, gm.fboys_igamma,]
         _, pw_grids, _, _, _ = eval_error_grids(
             funcs, A, X, gt, EPS, loops=1, print_times=False
         )

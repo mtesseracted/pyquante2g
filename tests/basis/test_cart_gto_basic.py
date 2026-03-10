@@ -3,14 +3,22 @@ import numpy as np
 import pyquante22.array_ops as arr
 from pyquante22.basis.cart_gto import CartGtoPrim as CGP
 from pyquante22.basis.cart_gto import CartGtoPrimPair as CGPP
+from tests.array_ops.conftest import INSTALLED_BACKENDS
+
+
+@pytest.fixture(scope="module", params=INSTALLED_BACKENDS)
+def ao(request):
+    return arr.ArrayOps(
+        request.param,
+        device=None,
+        default_dtype="float64",
+        int_dtype="int64",
+    )
+
 
 @pytest.fixture(scope="module")
-def ao_eps():
-    EPS = sys.float_info.epsilon
-    ao = arr.ArrayOps(
-        "torch", device="cpu", default_dtype="float64", int_dtype="int64"
-    )
-    return ao, EPS
+def eps():
+    return sys.float_info.epsilon
 
 
 def pad_ragged(ragged):  # stack a ragged list by padding to the max size
@@ -26,8 +34,7 @@ def to_numpy(ao, x):
 # @TODO add pytest.fixture of backends to test over, that will ensure
 # the convolution is correct before adding an explicit test
 # it can only do one right now, because it's hardcoded at the top of cart_gto.py
-def test_add(ao_eps):
-    ao, EPS = ao_eps
+def test_add(ao, eps):
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     amp = ao.arr([1, 0, 0], dtype=ao.int_dtype)
     r0 = ao.arr([0, 0, 0])
@@ -41,8 +48,7 @@ def test_add(ao_eps):
     assert len(gs3) == 6
 
 
-def test_mul(ao_eps):
-    ao, EPS = ao_eps
+def test_mul(ao, eps):
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     amp = ao.arr([1, 0, 0], dtype=ao.int_dtype)
     r0 = ao.arr([0, 0, 0])
@@ -57,8 +63,7 @@ def test_mul(ao_eps):
     assert ao.abs(gab.pab - gmul.pab).max().item() == 0.0
 
 
-def test_calc_eri_self_fallback_mixed_prims(ao_eps):
-    ao, EPS = ao_eps
+def test_calc_eri_self_fallback_mixed_prims(ao, eps):
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     ra = ao.arr([0.0, 0.0, 0.0])
     rb = ao.arr([0.5, 0.0, 0.0])
@@ -84,8 +89,7 @@ def test_calc_eri_self_fallback_mixed_prims(ao_eps):
     assert np.allclose(eri_self, eri_gen, rtol=1e-10, atol=1e-12)
 
 
-def test_str(ao_eps):
-    ao, EPS = ao_eps
+def test_str(ao, eps):
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     r0 = ao.arr([0, 0, 0])
     aa = ao.arr([1.0] * 1)
@@ -98,8 +102,7 @@ def test_str(ao_eps):
     assert "PairGTO" in s, f"Unexpected str({type(gp)}), was the method updated?"
 
 
-def test_repr(ao_eps):
-    ao, EPS = ao_eps
+def test_repr(ao, eps):
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     r0 = ao.arr([0, 0, 0])
     aa = ao.arr([1.0] * 3)
@@ -114,8 +117,7 @@ def test_repr(ao_eps):
 
 # @pytest.mark.arb # @DEBUG
 @pytest.mark.med
-def test_calc_binoms(ao_eps):
-    ao, EPS = ao_eps
+def test_calc_binoms(ao, eps):
     from pyquante22.ref_ints.utils import binomial_prefactor
 
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
@@ -181,9 +183,9 @@ def test_calc_binoms(ao_eps):
                 for a2 in am_list:
                     lmax = int(ao.sum(a1).item()) + int(ao.sum(a2).item())
                     rtol = (
-                        min(lmax + 1, 16) * 16 * EPS
+                        min(lmax + 1, 16) * 16 * eps
                     )  # loosen tolerances for high amom
-                    atol = min(lmax + 1, 16) / 16 * EPS
+                    atol = min(lmax + 1, 16) / 16 * eps
                     g1 = CGP.create_contraction(a1, r1, aa, ao=ao)
                     g2 = CGP.create_contraction(a2, r2, ab, ao=ao)
                     g12 = CGPP(g1, g2)
@@ -204,8 +206,7 @@ def test_calc_binoms(ao_eps):
 # end def test_calc_binoms():
 
 
-def test_triple_conv_sum(ao_eps):
-    ao, EPS = ao_eps
+def test_triple_conv_sum(ao, eps):
     from pyquante22.basis.cart_gto import GtoMath
     gm = GtoMath(ao)
     batch_sz = 11
@@ -229,13 +230,12 @@ def test_triple_conv_sum(ao_eps):
     gt = triple_sum_dot(*nargs)
     perrs = (ans - gt) / gt
     pmax = np.abs(perrs).max()
-    assert np.allclose(ans, gt, rtol=16*EPS, atol=EPS/64), \
+    assert np.allclose(ans, gt, rtol=16*eps, atol=eps/64), \
         f"worst %err: {pmax:.4e}"
 #end def test_triple_conv_sum():
 
 
-def test_calc_h_array(ao_eps):
-    ao, EPS = ao_eps
+def test_calc_h_array(ao, eps):
     from pyquante22.ref_ints.eri import H_array
 
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
@@ -279,9 +279,9 @@ def test_calc_h_array(ao_eps):
                 for a2 in am_list:
                     lmax = int(ao.sum(a1).item()) + int(ao.sum(a2).item())
                     rtol = (
-                        min(lmax + 1, 16) * 16 * EPS
+                        min(lmax + 1, 16) * 16 * eps
                     )  # loosen tolerances for high amom
-                    atol = min(lmax + 1, 16) / 16 * EPS
+                    atol = min(lmax + 1, 16) / 16 * eps
                     g1 = CGP.create_contraction(a1, r1, aa, ao=ao)
                     g2 = CGP.create_contraction(a2, r2, ab, ao=ao)
                     g12 = CGPP(g1, g2)
@@ -300,8 +300,7 @@ def test_calc_h_array(ao_eps):
 # end def test_calc_h_array():
 
 
-def test_norm_basic(ao_eps):
-    ao, EPS = ao_eps
+def test_norm_basic(ao, eps):
     alpha = 1.0 # power of an s-type orbital
     gamma = 2*alpha # orbital squared doubles exponent
     # gamma = 1/(2*sigma^2) # relation of gamma to normal distro's sigma
@@ -313,12 +312,11 @@ def test_norm_basic(ao_eps):
     r0 = ao.arr([0,]*3)
     aa = ao.arr([1,]*1)
     ans = CGP(ams, r0, aa, ao=ao).norm
-    assert np.isclose(ans.item(), n3d, rtol=16*EPS, atol=0)
+    assert np.isclose(ans.item(), n3d, rtol=16*eps, atol=0)
 
 
-def test_norm_vs_overlap(ao_eps):
-    ao, EPS = ao_eps
-    rtol, atol = 16*EPS, 0.0
+def test_norm_vs_overlap(ao, eps):
+    rtol, atol = 16*eps, 0.0
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     am1 = ao.arr([3, 1, 2], dtype=ao.int_dtype)
     am2 = ao.arr([4, 2, 2], dtype=ao.int_dtype)
@@ -342,9 +340,8 @@ def test_norm_vs_overlap(ao_eps):
 # end def test_norm_vs_overlap():
 
 
-def test_eri_self(ao_eps):
-    ao, EPS = ao_eps
-    rtol, atol = 16*EPS, 0.0
+def test_eri_self(ao, eps):
+    rtol, atol = 16*eps, 0.0
     am0 = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     am1 = ao.arr([3, 1, 1], dtype=ao.int_dtype)
     am2 = ao.arr([4, 2, 2], dtype=ao.int_dtype)
@@ -383,4 +380,4 @@ def test_eri_self(ao_eps):
     perr = (amx - gmx) / gmx if gmx != 0.0 else amx - gmx
     passed = perr == 0.0
     assert passed, f"fail eri_self %err: {perr:.4e}"
-#end def test_eri_self(ao_eps):
+#end def test_eri_self():

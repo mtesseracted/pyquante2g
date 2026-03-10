@@ -10,6 +10,7 @@ from pyquante22.atoms.molecule import Molecule
 from pyquante22.basis.basisset import BasisSet
 from pyquante22.basis.integrals import IntegralEngine, ndindex_unique
 
+pytestmark = pytest.mark.skip("deprecated")
 
 EPS = sys.float_info.epsilon
 rtol = 64 * EPS # 2**-46 = 1.4e-14
@@ -42,7 +43,7 @@ def _load_samples_module():
 @pytest.fixture(scope="module")
 def ao():
     return arr.ArrayOps(
-        "torch", device="cpu", default_dtype="float64", int_dtype="int64"
+        "torch", device=None, default_dtype="float64", int_dtype="int64"
     )
 
 

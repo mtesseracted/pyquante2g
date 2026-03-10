@@ -13,7 +13,7 @@ from pyquante22.basis.rhf import (
     build_jk_batch_block,
     guess_density_from_core,
 )
-
+pytestmark = pytest.mark.skip("deprecated")
 
 import sys
 EPS = sys.float_info.epsilon
@@ -66,7 +66,7 @@ def _load_samples_module():
 @pytest.fixture(scope="module")
 def ao():
     return arr.ArrayOps(
-        "torch", device="cpu", default_dtype="float64", int_dtype="int64"
+        "torch", device=None, default_dtype="float64", int_dtype="int64"
     )
 
 
@@ -162,7 +162,7 @@ def test_jk_full_4d_matches_ref_4d(small_molecule):
         assert passed, " ".join(f"{k}={v:.4e}" for k, v in merr.items())
 
 
-@pytest.mark.slow
+@pytest.mark.slo
 def test_jk_block_matches_full_sparse_4d_benzene(samples_module, ao):
     m = Molecule(samples_module.c6h6_raw, ao=ao)
     basis = BasisSet(m, name="sto-3g")

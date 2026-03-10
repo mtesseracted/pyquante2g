@@ -12,6 +12,8 @@ class TorchBackend(ArrayBackend):
 
     def __init__(self, device="cpu", 
                  default_dtype="float64", int_dtype="int64",):
+        if device is None:
+            device = "cpu"
         super().__init__(device=device, 
                          default_dtype=default_dtype, int_dtype=int_dtype)
 
@@ -70,6 +72,9 @@ class TorchBackend(ArrayBackend):
         ga = torch.exp(torch.lgamma(a))
         return ga * p
 
+    def reciprocal(self, x):
+        return torch.reciprocal(x)
+
     # def conv_transpose1d(self, *args, **kwargs):
     #     return torch.conv_transpose1d(*args, **kwargs)
     def conv_full_batch(self, a, b): # @TODO: needs to be in array_ops
@@ -104,9 +109,24 @@ class TorchBackend(ArrayBackend):
         # do any ufunc, not just add
         return x.scatter_add_(dim=axis, index=index, src=src)
 
+    def index_add_inplace(self, x, axis, index, src):
+        return x.index_add_(dim=axis, index=index, source=src)
+
     def pad(self, x, pad_width, mode="constant", constant_values=0):
-        # pad_width is list of (before, after) for each axis
-        return F.pad(x, pad=pad_width, mode=mode, value=constant_values)
+        # NumPy-style pad widths: ((before_0, after_0), ..., (before_n, after_n))
+        if isinstance(pad_width, int):
+            pad_width = ((pad_width, pad_width),) * x.ndim
+        elif len(pad_width) == 2 and not hasattr(pad_width[0], "__len__"):
+            if x.ndim != 1:
+                raise ValueError("scalar axis pair pad_width is only valid for 1D inputs")
+            pad_width = (tuple(pad_width),)
+        elif len(pad_width) != x.ndim:
+            raise ValueError("pad_width must provide one (before, after) pair per axis")
+
+        torch_pad = []
+        for before, after in reversed(pad_width):
+            torch_pad.extend([before, after])
+        return F.pad(x, pad=tuple(torch_pad), mode=mode, value=constant_values)
 
     def cumprod(self, x, axis=None):
         if axis is None:
@@ -115,13 +135,14 @@ class TorchBackend(ArrayBackend):
 
     def flip(self, x, axis=None):
         if axis is not None:
-            if hasattr(axis, 'len'):
+            if hasattr(axis, "__len__"):
                 axis = list(axis)
             else:
                 axis = [axis]
         return torch.flip(x, dims=axis)
 
     def segment_sum(self, x, lengths, axis=0):
+        lengths = torch.as_tensor(lengths, device=x.device, dtype=torch.int64)
         if axis == 0:
             return torch.segment_reduce(x, lengths=lengths, axis=0, reduce="sum")
         x2 = x.movedim(axis, 0)

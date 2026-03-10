@@ -136,7 +136,7 @@ def triple_conv_dot(
 
     x2 = fxyz[:, :take].unsqueeze(0)  # (1,B,take)
     if right_pad:
-        x2 = ao.pad(x2, (0, right_pad))  # asymmetric pad (left=0, right)
+        x2 = ao.pad(x2, ((0, 0), (0, 0), (0, right_pad)))
     w2 = k.unsqueeze(1)  # (B,1,nk)
     c = ao.conv1d(x2, w2, groups=B).squeeze(0)  # (B, nx) exactly
 

@@ -170,7 +170,7 @@ def _assert_ao_ordering_matches(basis, pmol):
 
 def _build_case(sample_case):
     aoi = arr.ArrayOps(
-        "torch", device="cpu", default_dtype="float64", int_dtype="int64"
+        "torch", device=None, default_dtype="float64", int_dtype="int64"
     )
     basis_name, sample_name = sample_case
     mol = load_sample_molecule(sample_name, aoi)

@@ -3,6 +3,7 @@ import itertools
 import math
 import numpy as np
 from importlib import resources
+import pyquante22.utils.math as pm
 from pyquante22.utils.elements import element_symbols
 from pyquante22.utils.file_utils import find_closest_file_match, load_gbs_file
 from pyquante22.basis.cart_gto_utils import am2sym, sym2am, gen_cartesian_momentums
@@ -15,39 +16,39 @@ import pyquante22.array_ops as arr
 # http://www.basissetexchange.org/basis/cc-pvdz/format/gaussian94/?version=1&elements=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36
 
 
-class CartGtoCont():
-    """Contracted Cartesian GTO basis function"""
-    def __init__(self, amom, cen, alphas, coeffs, ao=None):
-        self.amom = amom
-        self.cen = cen
-        self.alphas = alphas
-        self.coeffs = coeffs
-        self.ao = ao or arr.get_default_ops()
-        self.bfs_ = None
+# class CartGtoCont():
+#     """Contracted Cartesian GTO basis function"""
+#     def __init__(self, amom, cen, alphas, coeffs, ao=None):
+#         self.amom = amom
+#         self.cen = cen
+#         self.alphas = alphas
+#         self.coeffs = coeffs
+#         self.ao = ao or arr.get_default_ops()
+#         self.bfs_ = None
 
-    def __len__(self):
-        return len(self.alphas)
+#     def __len__(self):
+#         return len(self.alphas)
 
-    def __repr__(self):
-        ll = ",".join(f"{int(v):d}" for v in self.amom)
-        xx = ",".join(f"{float(v):.4f}" for v in self.cen)
-        cnt = len(self)
-        return f"({ll})@<{xx}>#{cnt}"
+#     def __repr__(self):
+#         ll = ",".join(f"{int(v):d}" for v in self.amom)
+#         xx = ",".join(f"{float(v):.4f}" for v in self.cen)
+#         cnt = len(self)
+#         return f"({ll})@<{xx}>#{cnt}"
 
-    def __getitem__(self, idx):
-        return CartGtoPrim(self.amom, self.cen, self.alphas[idx], self.coeffs[idx])
+#     def __getitem__(self, idx):
+#         return CartGtoPrim(self.amom, self.cen, self.alphas[idx], self.coeffs[idx])
 
-    def to_prim(self):
-        """stack the basis functions into a batch of CartGtoPrim
-        """
-        if self.bfs_ is None:
-            sz = len(self) # batch dim
-            amoms = self.ao.tile(self.amom, (sz,1)) # repeat for primitives
-            cens = self.ao.tile(self.cen, (sz,1)) # repeat for primitives
-            self.bfs_ = CartGtoPrim(amom=amoms, cen=cens, alpha=self.alphas, 
-                            coeffs=self.coeffs, ao=self.ao) #
-        return self.bfs_
-#end class ContractedCartGto():
+#     def to_prim(self):
+#         """stack the basis functions into a batch of CartGtoPrim
+#         """
+#         if self.bfs_ is None:
+#             sz = len(self) # batch dim
+#             amoms = self.ao.tile(self.amom, (sz,1)) # repeat for primitives
+#             cens = self.ao.tile(self.cen, (sz,1)) # repeat for primitives
+#             self.bfs_ = CartGtoPrim(amom=amoms, cen=cens, alpha=self.alphas, 
+#                             coeffs=self.coeffs, ao=self.ao) #
+#         return self.bfs_
+# #end class ContractedCartGto():
 
 
 class CartGtoContPair():
@@ -95,9 +96,8 @@ class CartShell():
         self.cart_order = cart_order
         self.ao = ao or arr.get_default_ops()
         if contraction_norm:
-            coeffs = self._normalize_contracted_coeffs(
-                self.amtot, alphas, coeffs
-            )
+            coeffs = self.normalize_contracted_coeffs(
+                self.amtot, alphas, coeffs)
         if not isinstance(alphas, self.ao.ArrayType):
             alphas = self.ao.arr(alphas)
         if not isinstance(coeffs, self.ao.ArrayType):
@@ -106,28 +106,34 @@ class CartShell():
         self.coeffs = coeffs
         self.bfs_ = None
 
-    @staticmethod
-    def _gto_norm(l, expnt):
-        """Primitive radial normalization for g=r^l exp(-alpha r^2)."""
-        n1 = l + 1.5
-        return 1.0 / math.sqrt(math.gamma(n1) / (2.0 * (2.0 * expnt) ** n1))
+    # @staticmethod
+    # def _shell_norm(l, expnt):
+    #     """Primitive radial normalization for g=r^l exp(-alpha r^2)."""
+    #     n1 = l + 1.5
+    #     return 1.0 / math.sqrt(math.gamma(n1) / (2.0 * (2.0 * expnt) ** n1))
 
-    @classmethod
-    def _normalize_contracted_coeffs(cls, l, exps, coeffs):
-        """Normalize contraction coefficients (PySCF-style).
+    def normalize_contracted_coeffs(self, l, exps, coeffs):
+        """Shell normalize contraction coefficients (PySCF-style).
 
         Applies the post-contraction normalization factor after primitive norms.
         """
-        exps = np.asarray(exps, dtype=float)
-        coeffs = np.asarray(coeffs, dtype=float)
-        norms = np.array([cls._gto_norm(l, e) for e in exps], dtype=float)
+        # return coeffs 
+        ao = self.ao
+        if not isinstance(exps, ao.ArrayType):
+            exps = ao.arr(exps)
+        if not isinstance(coeffs, ao.ArrayType):
+            coeffs = ao.arr(coeffs)
+
+        n1 = ao.arr(l + 1.5)
+        two = ao.arr(2.0)
+        norms = ao.sqrt(two * ao.pow(two * exps, n1))
         cs = coeffs * norms
         ee = exps.reshape(-1, 1) + exps.reshape(1, -1)
-        pref = math.gamma(l + 1.5) / 2.0
-        ee = pref * np.power(ee, -(l + 1.5))
-        val = float(cs @ ee @ cs)
-        s1 = 1.0 / math.sqrt(val)
+        ee = 0.5 * ao.pow(ee, -n1)
+        val = ao.einsum('i,ij,j->', cs, ee, cs)
+        s1 = ao.arr(1.0) / ao.sqrt(val)
         return coeffs * s1
+
 
     def __len__(self): # nbf * npf (all possible primitives)
         return self.nbf * self.npf
@@ -219,13 +225,14 @@ class CartShellBatch():
             cens = ao.zeros((sz, 3))
             alphas = ao.zeros((sz,))
             coeffs = ao.zeros((sz,))
-            icnt = 0
             am_tots = set([sh.amtot for sh in self.shells])
             am_lists = {
                 (amt, order): gen_cartesian_momentums(amt, order=order)
                 for amt in am_tots
                 for order in {sh.cart_order for sh in self.shells if sh.amtot == amt}
             }
+
+            icnt = 0
             for sh in self.shells:
                 sz = len(sh)
                 ams = ao.arr(am_lists[(sh.amtot, sh.cart_order)], dtype=ao.int_dtype)
@@ -233,6 +240,7 @@ class CartShellBatch():
                 cens[icnt:icnt+sz] = ao.tile(sh.cen, (sz, 1))
                 alphas[icnt:icnt+sz] = ao.tile(sh.alphas, (sh.nbf,1)).reshape(-1)
                 coeffs[icnt:icnt+sz] = ao.tile(sh.coeffs, (sh.nbf,1)).reshape(-1)
+                icnt += sz
 
             return CartGtoPrim(amom=amoms, cen=cens, alpha=alphas, 
                                 coeffs=coeffs, ao=self.ao)
@@ -362,22 +370,6 @@ class CartShellPair():
         raise TypeError(f"Unsupported shell type: {type(shell)}")
 
 
-    @staticmethod
-    def _segment_sum_fallback(x, lengths, axis, ao):
-        """Backend-agnostic segment sum using slicing + stack."""
-        if len(lengths) == 0:
-            raise ValueError("lengths cannot be empty")
-        outs = []
-        start = 0
-        for seg in lengths:
-            stop = start + int(seg)
-            sl = [slice(None)] * x.ndim
-            sl[axis] = slice(start, stop)
-            outs.append(ao.sum(x[tuple(sl)], axis=axis))
-            start = stop
-        return ao.stack(outs, axis=axis)
-
-
     @classmethod
     def eri_contraction_ragged(cls, x, axis_counts, coeffs=None, ao=None):
         """Contraction of ERIs with non-uniform primitive strides per axis."""
@@ -402,10 +394,6 @@ class CartShellPair():
                 x = x * c.reshape(shape)
             if x.shape[dim] != len(axis_counts[dim]):
                 x = ao.segment_sum(x, axis_counts[dim], axis=dim)
-                # try:
-                #     x = ao.segment_sum(x, axis_counts[dim], axis=dim)
-                # except Exception:
-                #     x = cls._segment_sum_fallback(x, axis_counts[dim], axis=dim, ao=ao)
 
         return x
 
@@ -638,23 +626,24 @@ if __name__ == "__main__":
     assert aoi.abs((tmp6-tmp3)/tmp3).max().item() < 5e-15, f"mismatch in eri contraction2"
     assert aoi.abs((tmp7-tmp3)/tmp3).max().item() < 5e-15, f"mismatch in eri contraction2"
 
-    t0 = time.time()
-    Bj = build_j2_blocks(b1)
-    t1 = time.time()
-    print(f"Built screening J in {t1-t0:.2f}s")
+    if False:
+        t0 = time.time()
+        Bj = build_j2_blocks(b1)
+        t1 = time.time()
+        print(f"Built screening J in {t1-t0:.2f}s")
 
 
-    def five_number_summary(data):
-        """ Compute min, 25th percentile, median, 75th percentile, max """
-        q75, q50, q25 = np.percentile(data, [75, 50, 25])
-        return np.stack([np.amin(data), q25, q50, q75, np.amax(data)])
+        def five_number_summary(data):
+            """ Compute min, 25th percentile, median, 75th percentile, max """
+            q75, q50, q25 = np.percentile(data, [75, 50, 25])
+            return np.stack([np.amin(data), q25, q50, q75, np.amax(data)])
 
-    nsh = len(b1.shells)
-    ti,tj = np.triu_indices(nsh)
-    Bjt = Bj[tj,ti].numpy()
-    assert len(Bjt) == (nsh*(nsh+1)//2)
+        nsh = len(b1.shells)
+        ti,tj = np.triu_indices(nsh)
+        Bjt = Bj[tj,ti].numpy()
+        assert len(Bjt) == (nsh*(nsh+1)//2)
 
-    for tol in [1e-6, 1e-8, 1e-10, 1e-12]:
-        mask = Bjt > tol
-        count = mask.sum()
-        print(f"{tol:.2e} {count} {count/len(Bjt):.4f}")
+        for tol in [1e-6, 1e-8, 1e-10, 1e-12]:
+            mask = Bjt > tol
+            count = mask.sum()
+            print(f"{tol:.2e} {count} {count/len(Bjt):.4f}")

@@ -71,8 +71,8 @@ class CartGtoPrim:
         self.nd = nd
 
         AT = self.ao.ArrayType
-        assert (isinstance(amom, AT) and isinstance(cen, AT) and isinstance(alpha, AT)), \
-            f"amom, cen, alpha must be {AT} types"
+        # assert (isinstance(amom, AT) and isinstance(cen, AT) and isinstance(alpha, AT)), \ # alpha can be scalar
+        assert (isinstance(amom, AT) and isinstance(cen, AT)), f"amom and cen must be {AT} types"
 
         # support getitem with 1 item still batch
         amom = self._cast_batch(amom, nd=self.nd, name="amom") 
@@ -279,6 +279,15 @@ class CartGtoPrimPair:
             self.pab = self.calc_product_centers()              # (Na,Nb,3) product centers P_AB
             self.binom_pres = self.calc_prod_binoms()           # (Na,Nb,3,Lp)
             self.hab = self.calc_h_array()                      # (Na,Nb,3,Lh)
+
+            ao = self.ao
+            if not ao.all(ao.isfinite(self.pab)):
+                debug_var = 1
+            if not ao.all(ao.isfinite(self.gamma)):
+                debug_var = 1
+            if not ao.all(ao.isfinite(self.hab)):
+                debug_var = 1
+
 
     def __len__(self):
         return int(len(self.ga) * len(self.gb))
@@ -493,7 +502,8 @@ class CartGtoPrimPair:
         sum_idx = ao.where(imask, sum_idx, co.arange_max[llmax + 1])
 
         terms_flat = terms.reshape(B, -1)
-        sum_idx_batch = ao.broadcast_to(sum_idx.reshape(-1), (B, -1))
+        sum_idx_flat = sum_idx.reshape(-1)
+        sum_idx_batch = ao.broadcast_to(sum_idx_flat, (B, sum_idx_flat.shape[0]))
         ret = ao.zeros((B, llmax + 2))
         ao.scatter_add_inplace(ret, 1, sum_idx_batch, terms_flat)
         ret = ret[:, :-1]
@@ -570,7 +580,7 @@ class CartGtoPrimPair:
         qp_over_delta_pows = ao.cumprod(ao.concat([ones, base_stack], axis=-1), axis=-1)
 
         # ---- qp^{-u} safely: define qp^{-u}=0 for u>0 when qp==0
-        qp_inv = ao.where(qp != 0, qp.reciprocal(), ao.zeros(qp.shape))
+        qp_inv = ao.where(qp != 0, ao.reciprocal(qp), ao.zeros(qp.shape))
         ones_u = ao.ones(qp_inv.shape)[..., None]                 # (N1,N2,1)
         inv_stack = ao.broadcast_to(qp_inv[..., None], (N1, N2, U))          # (N1,N2,U)
         qp_inv_pows = ao.cumprod(ao.concat([ones_u, inv_stack], axis=-1), axis=-1)
@@ -587,32 +597,33 @@ class CartGtoPrimPair:
             C_s = C[:, :, 2 * u : 2 * u + n]                    # s = 2u..S
             pow_i = qp_over_delta_pows[:, :, u : u + n]         # i = u..S-u
             inv_u = qp_inv_pows[:, :, u][:, :, None]            # qp^{-u}
-            b_su = b2[2 * u : 2 * u + n, u].view(1, 1, n)
+            b_su = b2[2 * u : 2 * u + n, u][None,None,:] #.view(1, 1, n)
 
-            ans[:, :, u : u + n].add_(sign_u * C_s * b_su * inv_u * pow_i)
+            ans[:, :, u : u + n] += sign_u * C_s * b_su * inv_u * pow_i
 
         # ---- Fix missing qp==0 cancellation terms (k==0 => s=2u, i=u)
         umax0 = min(U, S // 2)
         if umax0 >= 1:
             uvals = co.arange_max[1:umax0 + 1]  
             sidx = 2 * uvals
-            sign_u = (1 - 2 * (uvals & 1)).to(Hab.dtype)
+            sign_u = 1 - 2 * (uvals & 1)
 
-            inv_delta = delta.reciprocal()
-            invd_stack = inv_delta[..., None].expand(N1, N2, S)
+            inv_delta = ao.reciprocal(delta)
+            invd_stack = ao.broadcast_to(inv_delta[..., None], (N1, N2, S))
             inv_delta_pows = ao.cumprod(
                 ao.concat([ao.ones(inv_delta.shape)[..., None], invd_stack], axis=-1),
                 axis=-1,
             )
 
             C_diag = C[:, :, sidx]
-            b_diag = b2[sidx, uvals].to(Hab.dtype).view(1, 1, -1)
+            b_diag = b2[sidx, uvals][None,None,:] #.view(1, 1, -1)
             invd_u = inv_delta_pows[:, :, uvals]
 
-            corr = (sign_u.view(1, 1, -1) * C_diag * b_diag * invd_u)
+            # corr = (sign_u.view(1, 1, -1) * C_diag * b_diag * invd_u)
+            corr = (sign_u[None,None,:] * C_diag * b_diag * invd_u)
             corr = corr * qp_is_zero[...,None]
 
-            ans.index_add_(2, uvals, corr)
+            ao.index_add_inplace(ans, 2, uvals, corr)
 
         return ans
 
@@ -690,7 +701,7 @@ class CartGtoPrimPair:
         C_even = C_full[:, :, 0 : S + 1 : 2]  # (N1,N1,U+1)
 
         # ---- 1/delta^i for i=0..U  (delta assumed nonzero)
-        inv_delta = delta.reciprocal()
+        inv_delta = ao.reciprocal(delta)
         ones = ao.ones(inv_delta.shape)[..., None]  # (N1,N1,1)
         inv_stack = ao.broadcast_to(inv_delta[..., None], (N1, N1, L))
         inv_delta_pows = ao.cumprod(ao.concat([ones, inv_stack], axis=-1), axis=-1)
@@ -820,7 +831,8 @@ if __name__ == "__main__":
     ) # array ops on gpu
     cog = CachedOps(aog, amax=20)
 
-    aoi, coi = aoc, coc # use gpu
+    # aoi, coi = aoc, coc # use cpu
+    aoi, coi = aog, cog # use gpu
 
 
     def tolegacy(g):

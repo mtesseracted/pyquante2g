@@ -2,6 +2,11 @@ import pytest
 import pyquante22.array_ops as arr
 import importlib
 from tests.array_ops.conftest import backend, ftype, INSTALLED_BACKENDS, FLOAT_TYPES
+from tests.array_ops.optest_helpers import (
+    assert_smoke_output,
+    call_op,
+    make_ops,
+)
 
 
 def test_backend_init(backend, ftype):
@@ -37,77 +42,49 @@ def test_multiple_instances():
 
 
 def test_array_ops_basic(backend):
-    arr.set_backend(backend)
+    ops = make_ops(backend)
 
-    a = arr.arr([0,1])
-    assert isinstance(a, arr.ArrayType)
+    a = ops.arr([0,1])
+    assert isinstance(a, ops.ArrayType)
     assert a.shape == (2,)
 
-    a = arr.zeros(4)
+    a = ops.zeros(4)
     assert a.shape == (4,)
-    assert arr.sum(a) == arr.arr(0)
+    assert ops.sum(a) == ops.arr(0)
 
-    a = arr.zeros((2,3))
+    a = ops.zeros((2,3))
     assert a.shape == (2,3)
-    assert arr.sum(a) == arr.arr(0)
+    assert ops.sum(a) == ops.arr(0)
 
-    a = arr.arange(2)
+    a = ops.arange(2)
     assert a.shape == (2,)
-    assert arr.sum(a) == arr.arr(1)
+    assert ops.sum(a) == ops.arr(1)
 #end def test_array_ops_np_basic():
 
 
-def test_array_ops_unary(backend):
-    arr.set_backend(backend)
-    ops = arr.core.math_ops_unary
-    n = arr.arange(2.) + arr.arr(1.)
-    for op in ops:
-        fn = getattr(arr, op)(n,)
-        assert isinstance(fn, arr.ArrayType) and \
-            (fn.dtype == arr.default_dtype), f"{op} not callable"
+@pytest.mark.parametrize("op_name", arr.core.testable_ops)
+def test_array_ops_smoke(backend, op_name):
+    ops = make_ops(backend)
+    out = call_op(ops, op_name)
 
-def test_array_ops_binary(backend):
-    arr.set_backend(backend)
-    ops = arr.core.math_ops_binary
-    n = arr.arange(2.) + arr.arr(1.)
-    for op in ops:
-        fn = getattr(arr, op)(n,n)
-        assert isinstance(fn, arr.ArrayType) and \
-            (fn.dtype == arr.default_dtype), f"{op} not callable"
-
-
-def test_array_ops_reduction(backend):
-    arr.set_backend(backend)
-    ops = arr.core.reduction_ops
-    n = arr.arange(2.) + arr.arr(1.)
-    for op in ops:
-        fn = getattr(arr, op)(n)
-        assert (fn.dtype == arr.default_dtype), f"{op} not callable"
-
-
-def test_array_ops_manipulation(backend):
-    arr.set_backend(backend)
-    ops = arr.core.reduction_ops
-    for op in ops: # they have different function signatures, can't call
-        assert callable(getattr(arr, op)), f"{op} not callable"
+    assert_smoke_output(op_name, out, ops)
 
 
 def test_array_ops_mixture(backend):
-    arr.set_backend(backend)
-    arr.set_dtype("float64")
+    ops = make_ops(backend)
 
-    a = arr.arange(4.0)
-    assert all(a == arr.sqrt(arr.pow(a,2)))
-    assert all(arr.floor(a + 0.1) == a)
-    assert arr.exp(a[0]) == 1
-    b = arr.stack([a,a])
+    a = ops.arange(4.0)
+    assert all(a == ops.sqrt(ops.pow(a,2)))
+    assert all(ops.floor(a + 0.1) == a)
+    assert ops.exp(a[0]) == 1
+    b = ops.stack([a,a])
     assert b.shape == (2,len(a))
-    assert arr.amax(a) == arr.arr(len(a)-1)
-    assert arr.amin(a) == arr.arr(0)
+    assert ops.amax(a) == ops.arr(len(a)-1)
+    assert ops.amin(a) == ops.arr(0)
     # this norm() test only works for float64 default_dtype
-    assert arr.norm(a)**2 == arr.arr(14), f"{arr.norm(a)**2 - arr.arr(14)}, {a.dtype}"
-    assert arr.tolist(a) == list(range(4))
-    cs = arr.combinations(a, 2)
+    assert ops.norm(a)**2 == ops.arr(14), f"{ops.norm(a)**2 - ops.arr(14)}, {a.dtype}"
+    assert ops.tolist(a) == list(range(4))
+    cs = ops.combinations(a, 2)
     assert cs.shape == (6,2)
 #end def test_array_ops_np_ops():
  

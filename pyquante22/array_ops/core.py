@@ -2,56 +2,142 @@
 from itertools import combinations as _combinations
 
 
-# ops that need to be implemented but have the same function signature (mostly)
-# across all backends, split them so they're easier to test
-math_ops_unary = [
-    "sqrt", "square",
-    "exp", "log",
-    "sin", "cos", "atan",
-    "abs", "sign",
-    "round", "floor", "ceil",
-    "lgamma",
-    "cumprod",
+convert_data_ops = ["arr", "init", "asarray"]
+tolist_ops = ["tolist"]
+shape_create_ops = ["zeros", "ones"]
+range_create_ops = ["arange"]
+norm_ops = ["norm"]
+combinatoric_ops = ["combinations"]
+conv_batch_ops = ["conv_full_batch"]
+
+unary_positive_ops = ["sqrt", "log", "lgamma", "reciprocal"]
+unary_array_ops = [
+    "square",
+    "exp",
+    "sin",
+    "cos",
+    "atan",
+    "abs",
+    "sign",
+    "round",
+    "floor",
+    "ceil",
 ]
-math_ops_binary = [
-    "pow", 
-    "gamma_inc", # not regularized
-    "maximum", "minimum",
+unary_axis_ops = ["cumprod"]
+predicate_array_ops = ["isfinite"]
+
+binary_positive_ops = [
+    "pow",
+    "gamma_inc",  # not regularized
 ]
-reduction_ops = [
-    "sum", "prod",
-    "amax", "amin",
-    "any", "all",
-]
-creation_ops = ["eye",]
-manipulation_ops = [
-    "reshape", "view", "broadcast_to", 
-    "transpose",
-    "tile",
-    "stack", "concat",
-    "where", 
-    "take_along_axis",
-    "scatter_add",
-    "pad",
-    "flip",
-]
-misc_ops = [
-    "unique", # call this a reduction?
-    "einsum",
-    "conv1d",
-    "segment_sum",
-    "diag",
-    "allclose",
-    "broadcast_shapes",
-]
-basic_ops = sum([
-    math_ops_unary, 
-    math_ops_binary,
-    reduction_ops,
-    creation_ops,
-    manipulation_ops,
-    misc_ops,
-], []) # concat lists
+binary_array_ops = ["maximum", "minimum"]
+
+numeric_reduction_ops = ["sum", "prod", "amax", "amin"]
+logical_reduction_ops = ["any", "all"]
+
+eye_ops = ["eye"]
+reshape_ops = ["reshape",] # "view"]
+broadcast_ops = ["broadcast_to"]
+transpose_ops = ["transpose"]
+tile_ops = ["tile"]
+stack_ops = ["stack", "concat"]
+where_ops = ["where"]
+take_ops = ["take_along_axis"]
+scatter_ops = ["scatter_add", "scatter_add_inplace", "index_add_inplace"]
+pad_ops = ["pad"]
+flip_ops = ["flip"]
+unique_ops = ["unique"]
+einsum_ops = ["einsum"]
+conv1d_ops = ["conv1d"]
+segment_ops = ["segment_sum"]
+diag_ops = ["diag"]
+comparison_ops = ["allclose"]
+broadcast_shape_ops = ["broadcast_shapes"]
+dtype_info_ops = ["finfo", "iinfo"]
+
+OPS_BY_SIGNATURE = {
+    "convert_data": convert_data_ops,
+    "tolist": tolist_ops,
+    "shape_create": shape_create_ops,
+    "range_create": range_create_ops,
+    "norm": norm_ops,
+    "combinations": combinatoric_ops,
+    "conv_batch": conv_batch_ops,
+    "unary_positive": unary_positive_ops,
+    "unary_array": unary_array_ops,
+    "unary_axis": unary_axis_ops,
+    "predicate_array": predicate_array_ops,
+    "binary_positive": binary_positive_ops,
+    "binary_array": binary_array_ops,
+    "numeric_reduce": numeric_reduction_ops,
+    "logical_reduce": logical_reduction_ops,
+    "eye": eye_ops,
+    "reshape": reshape_ops,
+    "broadcast": broadcast_ops,
+    "transpose": transpose_ops,
+    "tile": tile_ops,
+    "stack": stack_ops,
+    "where": where_ops,
+    "take": take_ops,
+    "scatter": scatter_ops,
+    "pad": pad_ops,
+    "flip": flip_ops,
+    "unique": unique_ops,
+    "einsum": einsum_ops,
+    "conv1d": conv1d_ops,
+    "segment": segment_ops,
+    "diag": diag_ops,
+    "comparison": comparison_ops,
+    "broadcast_shape": broadcast_shape_ops,
+    "dtype_info": dtype_info_ops,
+}
+OP_SIGNATURES = {
+    op_name: sig_name
+    for sig_name, ops in OPS_BY_SIGNATURE.items()
+    for op_name in ops
+}
+
+# Backward-compatible coarse groups used by older tests.
+math_ops_unary = unary_positive_ops + unary_array_ops + unary_axis_ops
+math_ops_binary = binary_positive_ops + binary_array_ops
+reduction_ops = numeric_reduction_ops
+creation_ops = eye_ops
+manipulation_ops = (
+    reshape_ops
+    + broadcast_ops
+    + transpose_ops
+    + tile_ops
+    + stack_ops
+    + where_ops
+    + take_ops
+    + scatter_ops
+    + pad_ops
+    + flip_ops
+)
+misc_ops = (
+    unique_ops
+    + einsum_ops
+    + conv1d_ops
+    + segment_ops
+    + diag_ops
+    + predicate_array_ops
+    + logical_reduction_ops
+    + comparison_ops
+    + broadcast_shape_ops
+    + dtype_info_ops
+)
+basic_ops = sum(
+    [
+        math_ops_unary,
+        math_ops_binary,
+        reduction_ops,
+        creation_ops,
+        manipulation_ops,
+        misc_ops,
+    ],
+    [],
+)  # concat lists
+testable_ops = sum(OPS_BY_SIGNATURE.values(), [])
 
 
 class ArrayBackend:

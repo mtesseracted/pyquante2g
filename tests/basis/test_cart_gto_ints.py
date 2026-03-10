@@ -25,12 +25,16 @@ from pyquante22.basis.cart_gto import CartGtoPrim as CGP#, amax
 from pyquante22.basis.cart_gto import CartGtoPrimPair as CGPP
 from pyquante22.basis.cart_gto_utils import find_sum_triplets
 import pyquante22.arb_math as arb
+from tests.array_ops.conftest import INSTALLED_BACKENDS
 
 EPS = sys.float_info.epsilon
-backend = "torch"
-ao = arr.ArrayOps(
-    backend, device="cpu", default_dtype="float64", int_dtype="int64"
-)
+
+
+@pytest.fixture(params=INSTALLED_BACKENDS)
+def ao(request):
+    return arr.ArrayOps(
+        request.param, device=None, default_dtype="float64", int_dtype="int64"
+    )
 
 
 def am_mark(x, med=3, slo=9):  # mark ang.mom. cases
@@ -188,7 +192,7 @@ def gto_test_case(request):
         )
 
 
-def _build_gto_list(am_case):
+def _build_gto_list(am_case, ao):
     ra = ao.arr([0.125] * 3)
     rb = ao.arr([0.0625] * 3)
     rc = ao.arr([0.0, 0.5, -0.25])
@@ -207,8 +211,8 @@ def _build_gto_list(am_case):
 
 
 @pytest.fixture
-def gtos_setup(am_case):
-    return _build_gto_list(am_case)
+def gtos_setup(am_case, ao):
+    return _build_gto_list(am_case, ao)
 
 
 def test_gto_int_vs_ref(gtos_setup, gto_test_case):
@@ -256,10 +260,10 @@ def gto_batch_case(request):
         )
 
 
-def test_batch_vs_ref(gto_batch_case):
+def test_batch_vs_ref(gto_batch_case, ao):
 
     # make s,p,d,f GTOs
-    gto_list = sum([_build_gto_list(i) for i in range(4)], [])[::-1]
+    gto_list = sum([_build_gto_list(i, ao) for i in range(4)], [])[::-1]
     gbc = gto_batch_case
 
     if gbc.arity == 2:
