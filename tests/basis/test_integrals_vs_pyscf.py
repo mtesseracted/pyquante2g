@@ -9,6 +9,7 @@ from pyquante22.basis.basisset import BasisSet
 from pyquante22.basis.cart_gto_utils import cartPow2fullSym, sym2am
 from pyquante22.basis.integral_engines import IntegralEngineBase
 from pyquante22.utils.file_utils import find_closest_file_match, load_gbs_file
+from tests.array_ops.conftest import INSTALLED_BACKENDS
 
 try:
     from pyscf import gto
@@ -85,6 +86,13 @@ def one_elec_case(request):
 @pytest.fixture(params=_eri_params())
 def eri_case(request):
     return request.param
+
+
+@pytest.fixture(params=INSTALLED_BACKENDS)
+def ao(request):
+    return arr.ArrayOps(
+        request.param, device=None, default_dtype="float64", int_dtype="int64"
+    )
 
 
 def _build_pyscf_mol(mol, basis_name):
@@ -168,12 +176,9 @@ def _assert_ao_ordering_matches(basis, pmol):
         assert ama == amb, f"AO ordering mismatch, ours: {bfa}  // ref: {bfb}"
 
 
-def _build_case(sample_case):
-    aoi = arr.ArrayOps(
-        "torch", device=None, default_dtype="float64", int_dtype="int64"
-    )
+def _build_case(sample_case, ao):
     basis_name, sample_name = sample_case
-    mol = load_sample_molecule(sample_name, aoi)
+    mol = load_sample_molecule(sample_name, ao)
     basis = BasisSet(mol, name=basis_name, cart_order="pyscf")
 
     pmol = _build_pyscf_mol(mol, basis_name)
@@ -182,14 +187,14 @@ def _build_case(sample_case):
     return basis, pmol, ie
 
 
-def test_one_elec_vs_pyscf(one_elec_case):
+def test_one_elec_vs_pyscf(ao, one_elec_case):
     """Check S and H against PySCF reference data."""
     if not HAS_PYSCF:
         pytest.skip("PySCF not available. Install it to run this test.")
 
     RTOL = 1e-12
     ATOL = 1e-14
-    _, pmol, ie = _build_case(one_elec_case)
+    _, pmol, ie = _build_case(one_elec_case, ao)
     s, t, v = ie.build_one_electron_matrices()
     h = t + v
 
@@ -206,14 +211,14 @@ def test_one_elec_vs_pyscf(one_elec_case):
     _assert_tensor_matches("H", h, h_ref, RTOL, ATOL)
 
 
-def test_eri_vs_pyscf(eri_case):
+def test_eri_vs_pyscf(ao, eri_case):
     """Check ERI against PySCF reference data."""
     if not HAS_PYSCF:
         pytest.skip("PySCF not available. Install it to run this test.")
 
     RTOL = 1e-10
     ATOL = 1e-12
-    _, pmol, ie = _build_case(eri_case)
+    _, pmol, ie = _build_case(eri_case, ao)
     eri4d = ie.build_eri_4d_sh()
 
     s_ref = pmol.intor("int1e_ovlp_cart")

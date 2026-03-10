@@ -452,9 +452,8 @@ class CartGtoPrimPair:
     def calc_a_array(self, rcen):
         """THO eq. 2.18 and 3.1 (batched).
         rcen: (C,nd) or (nd,)
-        returns: (Na,Nb,C,nd,L)
+        returns: (nd,) list of (Na,Nb,C,L)
         """
-        # @TODO refactor to avoid large intermediate arrays
         ao, co = self.ao, self.co
         nd = self.nd
 
@@ -467,47 +466,67 @@ class CartGtoPrimPair:
 
         Na, Nb = len(self.ga), len(self.gb)
         C = rcen.shape[0]
-
-        # dPn: (Na,Nb,C,nd)
         dPn = self.pab[:, :, None, :] - rcen[None, None, :, :]
-
-        # flatten all batch and spatial dims to reuse orig logic
         bps = self.binom_pres  # (Na,Nb,nd,L)
         llmax = bps.shape[3] - 1
-        rumax = llmax // 2
-        B = Na * Nb * C * nd
+        B = Na * Nb * C
+        gamma = ao.broadcast_to(self.gamma[:, :, None], (Na, Nb, C)).reshape(B)
 
-        bipres = ao.broadcast_to(
-            bps[:, :, None, :, :], (Na, Nb, C, nd, llmax + 1)
-        ).reshape(B, llmax + 1)
-        gamma = ao.broadcast_to(
-            self.gamma[:, :, None, None], (Na, Nb, C, nd)
-        ).reshape(B)
-        dPn_flat = dPn.reshape(B)
+        ais = [None] * nd
+        for id in range(nd):
+            bipres_i = ao.broadcast_to(
+                bps[:, :, None, id, :], (Na, Nb, C, llmax + 1)
+            ).reshape(B, llmax + 1)
+            dPn_i = dPn[:, :, :, id].reshape(B)
+            ais[id] = self.calc_ai(bipres_i, dPn_i, gamma)
 
-        irng = co.arange_max[: llmax + 1][None, :, None, None]
-        rrng = co.arange_max[: rumax + 1][None, None, :, None]
-        urng = co.arange_max[: rumax + 1][None, None, None, :]
-        nrurng = -(rrng + urng)
+        return [ai.reshape(Na, Nb, C, llmax + 1) for ai in ais]
 
-        gpows = ao.pow((4 * gamma)[:, None, None, None], nrurng) # LARGE!
-        cpows = ao.pow(dPn_flat[:, None, None, None], irng + 2 * nrurng) # LARGE!
 
-        iuparity = co.parity[(irng + urng) % 2]
-        terms = iuparity * bipres[:, :, None, None] * cpows * gpows * \
-            co.binom22(irng, rrng, urng)
+    def calc_ai(self, bipres, dPn, gamma):
+        """A-array kernel per dimension.
+        bipres: (B, L+1); dPn, gamma: (B,)
+        returns: (B, L+1)
+        """
+        ao, co = self.ao, self.co
 
-        imask = (rrng <= irng // 2) & (urng <= (irng - 2 * rrng) // 2)
-        sum_idx = irng - 2 * rrng - urng
-        sum_idx = ao.where(imask, sum_idx, co.arange_max[llmax + 1])
+        B, Lp1 = bipres.shape
+        L = Lp1 - 1
+        U = L // 2
 
-        terms_flat = terms.reshape(B, -1)
-        sum_idx_flat = sum_idx.reshape(-1)
-        sum_idx_batch = ao.broadcast_to(sum_idx_flat, (B, sum_idx_flat.shape[0]))
-        ret = ao.zeros((B, llmax + 2))
-        ao.scatter_add_inplace(ret, 1, sum_idx_batch, terms_flat)
-        ret = ret[:, :-1]
-        return ret.reshape(Na, Nb, C, nd, llmax + 1)
+        dPn_ones = ao.ones(dPn.shape)[..., None]
+        dPn_stack = ao.broadcast_to(dPn[..., None], (B, L))
+        dPn_pows = ao.cumprod(
+            ao.concat([dPn_ones, dPn_stack], axis=-1),
+            axis=-1,
+        )
+
+        inv_4g = ao.reciprocal(4 * gamma)
+        g_ones = ao.ones(inv_4g.shape)[..., None]
+        g_stack = ao.broadcast_to(inv_4g[..., None], (B, U))
+        inv_4g_pows = ao.cumprod(
+            ao.concat([g_ones, g_stack], axis=-1),
+            axis=-1,
+        )
+
+        ans = ao.zeros((B, L + 1))
+        for u in range(U + 1):
+            for q in range(u, U + 1):
+                n = L + 1 - 2 * q
+                if n <= 0:
+                    break
+                t = co.arange_max[:n]
+                i = 2 * q + t
+                r = q - u
+                coeff = co.parity[(u + t) % 2] * co.binom22(i, r, u)
+                ans[:, u : u + n] += (
+                    bipres[:, 2 * q : 2 * q + n]
+                    * coeff[None, :]
+                    * inv_4g_pows[:, q][:, None]
+                    * dPn_pows[:, :n]
+                )
+
+        return ans
 
 
     def calc_nai(self, rcen):
@@ -528,15 +547,15 @@ class CartGtoPrimPair:
         Na, Nb = len(self.ga), len(self.gb)
         C = rcen.shape[0]
 
-        a_array = self.calc_a_array(rcen)  # (Na,Nb,C,nd,L)
+        a_array = self.calc_a_array(rcen)  # (nd,) list of (Na,Nb,C,L)
         B = Na * Nb * C
-        a_flat = ao.transpose(a_array.reshape(B, nd, -1), (1, 0, 2))  # (nd,B,L)
+        a_flat = [ai.reshape(B, -1) for ai in a_array]  # (nd,) list of (B,L)
 
         dpc = self.pab[:, :, None, :] - rcen[None, None, :, :]  # (Na,Nb,C,nd)
         rnp2 = ao.sum(ao.square(dpc), axis=3)  # (Na,Nb,C)
         fbx = self.gamma[:, :, None] * rnp2   # (Na,Nb,C)
 
-        ijkmax = 3 * a_array.shape[-1]  # @TODO get actual max needed
+        ijkmax = a_flat[0].shape[-1] + a_flat[1].shape[-1] + a_flat[2].shape[-1]
         boys = self.ga.gm.fboys(co.arange_max[: ijkmax + 1][None, :], fbx.reshape(B, 1))
         ret = self.ga.gm.triple_conv_dot(a_flat[0], a_flat[1], a_flat[2], boys)
         ret = ret.reshape(Na, Nb, C)
