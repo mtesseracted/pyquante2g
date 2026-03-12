@@ -138,7 +138,7 @@ def call_spec_for_op(op_name, ops):
     if op_name == "index_add_inplace":
         a = ops.zeros((3, 4))
         idx = ops.arr([0, 2], dtype=ops.int_dtype)
-        src = ops.arr([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]).T
+        src = ops.arr([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         return (a, 1, idx, src), {}
     if op_name == "gamma_inc":
         return (

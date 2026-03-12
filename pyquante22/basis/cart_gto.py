@@ -141,6 +141,13 @@ class CartGtoPrim:
     def __mul__(self, other):
         return CartGtoPrimPair(self, other)
 
+    def __or__(self, other):
+        if isinstance(other, type(self)):
+            return self.calc_eri2(other)
+        if hasattr(other, "shape"):
+            return self.calc_nai(other)
+        raise NotImplementedError(f"No integral implemented for {type(other)}")
+
     def __add__(self, other):
         if self.nd != other.nd:
             raise ValueError("nd mismatch")
@@ -253,6 +260,143 @@ class CartGtoPrim:
         return ret if keepC else ret[:,0,:,:]
     #end def calc_binoms(self, pab: ArrType, offset=None) -> ArrType:
 
+    def calc_h_single(self):
+        """Hermite coefficients for a single primitive batch."""
+        ao, co = self.ao, self.co
+        B = len(self)
+        lmax = self.lmax
+        rmax = lmax // 2
+
+        lrng = self.amom[:, :, None]  # (B,nd,1)
+        rrng = co.arange_max[: rmax + 1][None, None, :]  # (1,1,R)
+        valid = rrng <= (lrng // 2)
+        t = lrng - 2 * rrng
+
+        g4 = (4 * self.alpha)[:, None, None]
+        vals = ao.pow(g4, rrng - lrng) * co.binom2s[lrng, rrng]
+
+        ret = ao.zeros((B, self.nd, lmax + 1))
+        sum_ids = ao.where(valid, t, co.izero)
+        vals = ao.where(valid, vals, co.zero)
+        ao.scatter_add_inplace(ret, -1, sum_ids, vals)
+        return ret
+
+    def calc_c_array2(self, other):
+        """calc C array for 2-center ERI (a|c)."""
+        ao, co = self.ao, self.co
+        if self.ao is not other.ao:
+            raise ValueError("CartGtoPrim must share ArrayOps backend")
+        if self.nd != other.nd:
+            raise ValueError("nd mismatch")
+
+        Na, Nc = len(self), len(other)
+        h1 = ao.transpose(self.calc_h_single(), [1, 0, 2])   # (nd,Na,L)
+        h2 = ao.transpose(other.calc_h_single(), [1, 0, 2])  # (nd,Nc,M)
+
+        deltas = 0.25 * (co.one / self.alpha[:, None] + co.one / other.alpha[None, :])
+        qp = other.cen[None, :, :] - self.cen[:, None, :]  # (Na,Nc,nd)
+        qp = ao.transpose(qp, [2, 0, 1])  # (nd,Na,Nc)
+
+        cis = [None] * self.nd
+        for id in range(self.nd):
+            cis[id] = CartGtoPrimPair.calc_ci(
+                self, h1[id], h2[id], qp[id], deltas, co.binom2s
+            )
+        return cis
+
+    def calc_a_array(self, rcen):
+        """A-array for primitive-point-charge NAI.
+        rcen: (C,nd) or (nd,)
+        returns: (nd,) list of (Na,C,L)
+        """
+        ao = self.ao
+        nd = self.nd
+
+        if getattr(rcen, "ndim", None) == 1:
+            if rcen.shape[0] != nd:
+                raise ValueError("rcen must be shape (nd,) or (C,nd)")
+            rcen = rcen[None, :]
+        if getattr(rcen, "ndim", None) != 2 or rcen.shape[1] != nd:
+            raise ValueError("rcen must be shape (nd,) or (C,nd)")
+
+        Na = len(self)
+        C = rcen.shape[0]
+        dPn = self.cen[:, None, :] - rcen[None, :, :]
+        bps = self.calc_binoms(self.cen)  # (Na,nd,L), only i=l survives
+        llmax = bps.shape[2] - 1
+        B = Na * C
+        gamma = ao.broadcast_to(self.alpha[:, None], (Na, C)).reshape(B)
+
+        ais = [None] * nd
+        for id in range(nd):
+            bipres_i = ao.broadcast_to(
+                bps[:, None, id, :], (Na, C, llmax + 1)
+            ).reshape(B, llmax + 1)
+            dPn_i = dPn[:, :, id].reshape(B)
+            ais[id] = CartGtoPrimPair.calc_ai(self, bipres_i, dPn_i, gamma)
+
+        return [ai.reshape(Na, C, llmax + 1) for ai in ais]
+
+    def calc_nai(self, rcen):
+        """Nuclear attraction integral (a|R), batched over R."""
+        ao, co = self.ao, self.co
+        nd = self.nd
+
+        if getattr(rcen, "ndim", None) == 1:
+            if rcen.shape[0] != nd:
+                raise ValueError("rcen must be shape (nd,) or (C,nd)")
+            rcen = rcen[None, :]
+        if getattr(rcen, "ndim", None) != 2 or rcen.shape[1] != nd:
+            raise ValueError("rcen must be shape (nd,) or (C,nd)")
+
+        Na = len(self)
+        C = rcen.shape[0]
+        a_array = self.calc_a_array(rcen)  # (nd,) list of (Na,C,L)
+        B = Na * C
+        a_flat = [ai.reshape(B, -1) for ai in a_array]
+
+        dpc = self.cen[:, None, :] - rcen[None, :, :]  # (Na,C,nd)
+        rnp2 = ao.sum(ao.square(dpc), axis=2)  # (Na,C)
+        fbx = self.alpha[:, None] * rnp2
+
+        ijkmax = a_flat[0].shape[-1] + a_flat[1].shape[-1] + a_flat[2].shape[-1]
+        boys = self.gm.fboys(co.arange_max[: ijkmax + 1][None, :], fbx.reshape(B, 1))
+        ret = self.gm.triple_conv_dot(a_flat[0], a_flat[1], a_flat[2], boys)
+        ret = ret.reshape(Na, C)
+
+        ret *= (-2 * co.pi / self.alpha)[:, None]
+        return ret
+
+    def calc_eri2(self, other):
+        """Two-center electron repulsion integrals (a|c)."""
+        ao, co = self.ao, self.co
+        if self.ao is not other.ao:
+            raise ValueError("CartGtoPrim must share ArrayOps backend")
+        if self.nd != other.nd:
+            raise ValueError("nd mismatch")
+
+        Na, Nc = len(self), len(other)
+        c_array = self.calc_c_array2(other)  # (nd,) list of (Na,Nc,L+M)
+        B = Na * Nc
+        c_flat = [ci.reshape(B, -1) for ci in c_array]
+
+        qp2 = ao.sum(ao.square(self.cen[:, None, :] - other.cen[None, :, :]), axis=2)
+        deltas = 0.25 * (co.one / self.alpha[:, None] + co.one / other.alpha[None, :])
+        fbx = 0.25 * qp2 / deltas
+
+        ijkmax = c_flat[0].shape[-1] + c_flat[1].shape[-1] + c_flat[2].shape[-1]
+        boys = self.gm.fboys(co.arange_max[: ijkmax + 1][None, :], fbx.reshape(B, 1))
+
+        ret = self.gm.triple_conv_dot(c_flat[0], c_flat[1], c_flat[2], boys)
+        ret = ret.reshape(Na, Nc)
+
+        pref = co.eri_fac / (
+            self.alpha[:, None] * other.alpha[None, :]
+            * ao.sqrt(self.alpha[:, None] + other.alpha[None, :])
+        )
+        ret *= pref
+        return ret
+
 #end class CartGtoPrim:
 
 
@@ -313,6 +457,8 @@ class CartGtoPrimPair:
             return self.calc_eri_self()
         if isinstance(other, type(self)):
             return self.calc_eri(other)  #
+        if isinstance(other, CGP):
+            return self.calc_eri3(other)
         if hasattr(other, "shape"):
             return self.calc_nai(other)  # 
         raise NotImplementedError(f"No integral implemented for {type(other)}")
@@ -599,7 +745,9 @@ class CartGtoPrimPair:
         qp_over_delta_pows = ao.cumprod(ao.concat([ones, base_stack], axis=-1), axis=-1)
 
         # ---- qp^{-u} safely: define qp^{-u}=0 for u>0 when qp==0
-        qp_inv = ao.where(qp != 0, ao.reciprocal(qp), ao.zeros(qp.shape))
+        # qp_inv = ao.where(qp != 0, ao.reciprocal(qp), ao.zeros(qp.shape))
+        qp_safe = ao.where(qp_is_zero, ao.arr(1), qp)
+        qp_inv = ao.reciprocal(qp_safe)
         ones_u = ao.ones(qp_inv.shape)[..., None]                 # (N1,N2,1)
         inv_stack = ao.broadcast_to(qp_inv[..., None], (N1, N2, U))          # (N1,N2,U)
         qp_inv_pows = ao.cumprod(ao.concat([ones_u, inv_stack], axis=-1), axis=-1)
@@ -671,6 +819,35 @@ class CartGtoPrimPair:
             cis[id] = self.calc_ci(h1i, h2i, qpi, deltas, co.binom2s)
 
         return cis # (nd,) list of (Na*Nb,Nc*Nd,L+M)
+
+    def calc_c_array3(self, other):
+        """calc C array for 3-center ERI (ab|c) with c a single primitive batch."""
+        ao, co = self.ao, self.co
+        if self.ao is not other.ao:
+            raise ValueError("CartGtoPrim must share ArrayOps backend")
+        if self.nd != other.nd:
+            raise ValueError("nd mismatch")
+
+        Na, Nb, Nc = len(self.ga), len(self.gb), len(other)
+        N1 = Na * Nb
+        hab = self.hab.reshape(-1, *self.hab.shape[2:])  # (Na*Nb,nd,L)
+        hab = ao.transpose(hab, [1, 0, 2])  # (nd,N1,L)
+
+        hc = ao.transpose(other.calc_h_single(), [1, 0, 2])  # (nd,Nc,M)
+
+        gab = self.gamma.reshape(-1)  # (N1,)
+        gc = other.alpha  # (Nc,)
+        deltas = 0.25 * (co.one / gab[:, None] + co.one / gc[None, :])  # (N1,Nc)
+
+        qp = other.cen[None, None, :, :] - self.pab[:, :, None, :]  # (Na,Nb,Nc,nd)
+        qp = qp.reshape(N1, Nc, self.nd)
+        qp = ao.transpose(qp, [2, 0, 1])  # (nd,N1,Nc)
+
+        cis = [None] * self.nd
+        for id in range(self.nd):
+            cis[id] = self.calc_ci(hab[id], hc[id], qp[id], deltas, co.binom2s)
+
+        return cis  # (nd,) list of (Na*Nb,Nc,L+M)
 
     def calc_c_self(self):
         """calc C array for self interaction"""
@@ -789,6 +966,49 @@ class CartGtoPrimPair:
         return ret
     # end def calc_eri(self, other):
 
+    def calc_eri3(self, other):
+        """Three-center electron repulsion integrals (a*b|c)."""
+        ao, co = self.ao, self.co
+        if self.ao is not other.ao:
+            raise ValueError("CartGtoPrim must share ArrayOps backend")
+        if self.nd != other.nd:
+            raise ValueError("nd mismatch")
+
+        Na, Nb, Nc = len(self.ga), len(self.gb), len(other)
+        gab = self.gamma  # (Na,Nb)
+        gc = other.alpha  # (Nc,)
+
+        c_array = self.calc_c_array3(other)  # (nd,) list of (Na*Nb,Nc,L+M)
+        B = Na * Nb * Nc
+        c_flat = [ci.reshape(B, -1) for ci in c_array]
+
+        qp2 = ao.sum(
+            ao.square(self.pab[:, :, None, :] - other.cen[None, None, :, :]),
+            axis=3,
+        )  # (Na,Nb,Nc)
+        deltas = 0.25 * (co.one / gab[:, :, None] + co.one / gc[None, None, :])
+        fbx = 0.25 * qp2 / deltas  # (Na,Nb,Nc)
+
+        ijkmax = c_flat[0].shape[-1] + c_flat[1].shape[-1] + c_flat[2].shape[-1]
+        boys = self.ga.gm.fboys(co.arange_max[: ijkmax + 1][None, :], fbx.reshape(B, 1))
+
+        ret = self.ga.gm.triple_conv_dot(c_flat[0], c_flat[1], c_flat[2], boys)
+        ret = ret.reshape(Na, Nb, Nc)
+
+        aa = self.ga.alpha[:, None]
+        ab = self.gb.alpha[None, :]
+        rab2 = ao.sum(
+            ao.square(self.ga.cen[:, None, :] - self.gb.cen[None, :, :]),
+            axis=2,
+        )  # (Na,Nb)
+
+        pref = co.eri_fac / (
+            gab[:, :, None] * gc[None, None, :] * ao.sqrt(gab[:, :, None] + gc[None, None, :])
+        )
+        ret *= pref
+        ret *= ao.exp(-aa * ab * rab2 / gab)[:, :, None]
+        return ret
+
 
     def calc_eri_self(self):
         """Electron repulsion integrals (a*b|a*b) using calc_c_self"""
@@ -850,8 +1070,8 @@ if __name__ == "__main__":
     ) # array ops on gpu
     cog = CachedOps(aog, amax=20)
 
-    # aoi, coi = aoc, coc # use cpu
-    aoi, coi = aog, cog # use gpu
+    aoi, coi = aoc, coc # use cpu
+    # aoi, coi = aog, cog # use gpu
 
 
     def tolegacy(g):
@@ -912,5 +1132,13 @@ if __name__ == "__main__":
 
     tmp = gab.calc_eri(gcd) # NaNs !!!! (for both cpu and gpu?)
 
+
+    # g2 =  CartGtoPrim(ams, r0, 2*aa, ao=aoi, co=coi)
+    g2 = CartGtoPrim(amn, r0, 2*aa, ao=aoi, co=coi)
+    gna = CartGtoPrim(amn, r0, aa, ao=aoi, co=coi)
+    gp2 = gna * gs
+
+    tmp = (gab | gp2)[:,:,0,0]
+    tm2 = (gab | g2)[:,:,0]
 
     debug_var = 1

@@ -20,7 +20,7 @@
 - basis: basis set manipulations
     - cart_gto: cart. gto primitives and pairs, calc's integrals
     - cart_gto_data: basis set data files
-    - basisset:
+    - basisset: 
     - cart_gto_utils: util funcs, e.g. generating ang. mom. tuples
     - data: hard-coded basis sets in python data structs
     - one_ints
@@ -56,20 +56,23 @@ and time (e.g. HT95 vs THO66 for NAI)
 version of JIT instead of decoratores, e.g. torch.script(), jax.jit(),
 cupy is questionable?, tf.function()
     - cupy can use cp.RawKernel(), but it takes a string, not a function
-- add tests for Molecule class, test NN energy, and marble test all init methods
-- need a dedicated 2-center 3-GTO ERI for doing RI and Cholesky, which we will 
-    want later so we can efficiently calculate higher-dim ERIs
+- ~~add tests for Molecule class, test NN energy, and marble test all init methods~~
+- ~~need a dedicated 2-center 3-GTO ERI for doing RI and Cholesky, which we will~~
+    ~~want later so we can efficiently calculate higher-dim ERIs~~
 - Add an SCF class that can do RHF and UHF
-- since the pipeline works with torch now we need a set of tests for ArrayOps
-    that will test every operation available against torch as a reference
+- ~~since the pipeline works with torch now we need a set of tests for ArrayOps~~
+    ~~that will test every operation available against torch as a reference~~
 - finish the numpy/cupy/jax/tensorflow backends, add to the tests for cart_gto
 - Analysis scripts:
     - Speed of some test calculations vs PySCF on cpu (& gpu ideally)
     - Speed and accuracy of our ERIs vs Libint and Libcint (arb_math reference)
 
 ### For v0 publication:
-- Finish the RHF example
+- Finish the RHF example: 12Mar26, some examples there, need to clean up
 - Make an example that uses backprop to do something (back prop to atom positions?)
+- add one more gpu backend, (cupy for speed)
+- add benchmarks
+    - benchmark vs a straight integral engine
 
 
 ## Future Ideas

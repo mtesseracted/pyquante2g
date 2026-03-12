@@ -87,7 +87,19 @@ def test_array_ops_mixture(backend):
     cs = ops.combinations(a, 2)
     assert cs.shape == (6,2)
 #end def test_array_ops_np_ops():
- 
+
+
+def test_array_ops_eigh(backend):
+    ops = make_ops(backend)
+    mat = ops.arr([[3.0, 1.0], [1.0, 3.0]])
+    evals, evecs = ops.eigh(mat)
+
+    assert evals.shape == (2,)
+    assert evecs.shape == (2, 2)
+
+    recon = evecs @ ops.diag(evals) @ ops.transpose(evecs)
+    assert ops.allclose(recon, mat)
+
 
 # def test_conv_full_batch(backend):
 #     arr.set_backend(backend)

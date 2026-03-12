@@ -25,6 +25,9 @@ class NumpyBackend(ArrayBackend):
     def reciprocal(self, x):
         return np.reciprocal(x)
 
+    def eigh(self, x):
+        return np.linalg.eigh(x)
+
     def flip(self, x, axis=None):
         return np.flip(x, axis=axis)
 

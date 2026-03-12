@@ -265,17 +265,88 @@ class IntegralEngineBase:
 
 
 
-    # def build_j_dense(self, density, eri=None):
-    #     if eri is None:
-    #         if self.eri_4d is None:
-    #             eri = self.build_eri_4d_sh()
-    #         else:
-    #             eri = self.eri_4d
+    def build_j_dense(self, density, eri=None):
+        if eri is None:
+            if self.eri_4d is None:
+                eri = self.build_eri_4d_sh()
+            else:
+                eri = self.eri_4d
 
-    #     return self.ao.einsum('ijkl,kl', eri, density)
+        return self.ao.einsum('ijkl,kl', eri, density)
 
-    # def build_j_batch(self, density, batch_size=64):
-    #     pass
+    def build_k_dense(self, density, eri=None):
+        if eri is None:
+            if self.eri_4d is None:
+                eri = self.build_eri_4d_sh()
+            else:
+                eri = self.eri_4d
+
+        eri_prqs = self.ao.transpose(eri, (0, 2, 1, 3))
+        return self.build_j_dense(density, eri=eri_prqs)
+
+    def _iter_eri_blocks(self, batch_size):
+        basis = self.basis
+        eri4d = self.eri_4d
+
+        for sh_slices, ao_slices in self.iter_eri_batch(batch_size=batch_size):
+            if eri4d is None:
+                ii, jj, kk, ll = sh_slices
+                si = CartShellBatch(basis.shells[ii])
+                sj = CartShellBatch(basis.shells[jj])
+                sk = CartShellBatch(basis.shells[kk])
+                sl = CartShellBatch(basis.shells[ll])
+                eri_block = (si * sj) | (sk * sl)
+            else:
+                eri_block = eri4d[ao_slices]
+
+            yield ao_slices, eri_block
+
+    def build_j_batch(self, density, batch_size=int(2**10)):
+        basis = self.basis
+        ao = self.ao
+        j_mat = ao.zeros((basis.nbf, basis.nbf), dtype=density.dtype)
+
+        for ao_slices, eri_block in self._iter_eri_blocks(batch_size=batch_size):
+            ai, aj, ak, al = ao_slices
+            d_block = density[ak, al]
+            j_block = ao.einsum("ijkl,kl->ij", eri_block, d_block)
+            j_mat[ai, aj] = j_mat[ai, aj] + j_block
+
+        return j_mat
+
+    def build_k_batch(self, density, batch_size=int(2**10)):
+        basis = self.basis
+        ao = self.ao
+        k_mat = ao.zeros((basis.nbf, basis.nbf), dtype=density.dtype)
+
+        for ao_slices, eri_block in self._iter_eri_blocks(batch_size=batch_size):
+            ai, aj, ak, al = ao_slices
+            eri_prqs = ao.transpose(eri_block, (0, 2, 1, 3))
+            d_block = density[aj, al]
+            k_block = ao.einsum("ikjl,jl->ik", eri_prqs, d_block)
+            k_mat[ai, ak] = k_mat[ai, ak] + k_block
+
+        return k_mat
+
+    def build_jk_batch(self, density, batch_size=int(2**10)):
+        basis = self.basis
+        ao = self.ao
+        j_mat = ao.zeros((basis.nbf, basis.nbf), dtype=density.dtype)
+        k_mat = ao.zeros((basis.nbf, basis.nbf), dtype=density.dtype)
+
+        for ao_slices, eri_block in self._iter_eri_blocks(batch_size=batch_size):
+            ai, aj, ak, al = ao_slices
+
+            d_kl = density[ak, al]
+            j_block = ao.einsum("ijkl,kl->ij", eri_block, d_kl)
+            j_mat[ai, aj] = j_mat[ai, aj] + j_block
+
+            eri_prqs = ao.transpose(eri_block, (0, 2, 1, 3))
+            d_jl = density[aj, al]
+            k_block = ao.einsum("ikjl,jl->ik", eri_prqs, d_jl)
+            k_mat[ai, ak] = k_mat[ai, ak] + k_block
+
+        return j_mat, k_mat
 
     @staticmethod
     def _fill_swap_symm(array, ids, vals, ao):
