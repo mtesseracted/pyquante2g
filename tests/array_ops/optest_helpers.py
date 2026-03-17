@@ -92,6 +92,10 @@ def call_spec_for_signature(sig_name, ops):
         a = ops.arr([[10.0, 30.0, 20.0], [60.0, 40.0, 50.0]])
         idx = ops.arr([[2, 1, 0], [0, 2, 1]], dtype=ops.int_dtype)
         return (a, idx), {"axis": 1}
+    if sig_name == "slice":
+        a = ops.zeros((3, 4))
+        src = ops.arr([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        return (a, 1, 1, src), {}
     if sig_name == "scatter":
         a = ops.zeros((3, 2))
         idx = ops.arr([[0, 1], [1, 0], [2, 1]], dtype=ops.int_dtype)
@@ -158,6 +162,8 @@ def to_numpy(x):
         x = x.detach()
     if hasattr(x, "cpu"):
         x = x.cpu()
+    if hasattr(x, "get"):
+        x = x.get()
     if hasattr(x, "numpy"):
         return x.numpy()
     return np.asarray(x)

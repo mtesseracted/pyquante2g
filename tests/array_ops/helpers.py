@@ -4,8 +4,6 @@ def get_gpu0_torch():
     try:
         import torch
         if torch.cuda.is_available():
-            # idx = torch.cuda.current_device()
-            # name = torch.cuda.get_device_name(idx)
             return f"cuda:{torch.cuda.current_device()}"
     except Exception:
         return None
@@ -27,9 +25,7 @@ def get_gpu0_cupy():
     try:
         import cupy as cp
         if cp.cuda.runtime.getDeviceCount() > 0:
-            dev = cp.cuda.Device(0)
-            # devices["cupy"] = f"cuda:{int(dev)} ({dev.name})"
-            return f"{int(dev)}"
+            return "cuda:0"
     except Exception:
         return None
 
@@ -71,3 +67,25 @@ def detect_gpu0_devices(found_modules):
     devices = {backend: get_gpu0(backend) for backend in found_modules}
     return devices
 
+
+def get_array_device_label(x):
+    dev = getattr(x, "device", None)
+    if callable(dev):
+        dev = dev()
+    if dev is None:
+        devices = getattr(x, "devices", None)
+        if callable(devices):
+            devices = list(devices())
+            if len(devices) == 1:
+                dev = devices[0]
+    if dev is None:
+        return None
+    if hasattr(dev, "platform") and hasattr(dev, "id"):
+        return f"{dev.platform}:{dev.id}"
+    if hasattr(dev, "type"):
+        if getattr(dev, "index", None) is None:
+            return dev.type
+        return f"{dev.type}:{dev.index}"
+    if hasattr(dev, "id"):
+        return f"cuda:{int(dev.id)}"
+    return str(dev)

@@ -10,7 +10,7 @@ from pyquante22.basis.basisset import (
     CartShellBatch,
 )
 from pyquante22.basis.cart_gto import CartGtoPrim
-from tests.array_ops.conftest import AVAILABLE_GPUS
+from tests.array_ops.conftest import INSTALLED_BACKENDS
 import itertools
 
 
@@ -18,11 +18,14 @@ SAMPLE_MOLECULES = ["Hydrogen", "LiH", "Water"]
 SAMPLE_BASES = ["sto-3g", "6-31g", "aug-cc-pvdz"]
 
 
-# @pytest.fixture(params=["cpu"] + list(AVAILABLE_GPUS.keys()))
-@pytest.fixture(params=["cpu"] + ([AVAILABLE_GPUS["torch"]] if "torch" in AVAILABLE_GPUS else []))
+@pytest.fixture(params=INSTALLED_BACKENDS)
 def ao(request):
-    device = request.param
-    return arr.ArrayOps("torch", device=device, default_dtype="float64", int_dtype="int64")
+    return arr.ArrayOps(
+        request.param,
+        device=None,
+        default_dtype="float64",
+        int_dtype="int64",
+    )
 
 
 def _assert_basic_methods(obj):
@@ -158,3 +161,23 @@ def test_basisset_bad_name(ao, basis_name):
     mol = load_sample_molecule("Hydrogen", ao=ao)
     with pytest.raises(ValueError, match="Cannot find the .* basis set"):
         BasisSet(mol, name=basis_name)
+
+
+def test_jax_shell_pair_eri_smoke():
+    pytest.importorskip("jax")
+
+    ao = arr.ArrayOps(
+        "jax",
+        device=None,
+        default_dtype="float64",
+        int_dtype="int64",
+    )
+    mol = load_sample_molecule("Hydrogen", ao=ao)
+    basis = BasisSet(mol, name="sto-3g")
+    sh = basis.shells[0]
+
+    eri = (sh * sh) | (sh * sh)
+    eri_np = np.asarray(ao.tolist(eri))
+
+    assert eri_np.shape == (1, 1, 1, 1)
+    assert np.all(np.isfinite(eri_np))

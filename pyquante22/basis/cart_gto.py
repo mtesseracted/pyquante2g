@@ -252,7 +252,7 @@ class CartGtoPrim:
         irng = co.arange_max[:lmax + 1]  # (L,)
         pows = amom[..., None] - irng[None, None, None, :]  # (B,C,nd,L)
 
-        pows[pows < 0] = co.izero  # 
+        pows = ao.where(pows < 0, co.izero, pows)
         ret = co.binoms[amom[..., None], irng[None, None, None, :]]  * \
             ao.pow((pab - self.cen[:, None, :])[..., None], pows) # (B,C,nd,L)
         mask = (amom < 0)[..., None]  # (B,1,nd,1)
@@ -278,7 +278,7 @@ class CartGtoPrim:
         ret = ao.zeros((B, self.nd, lmax + 1))
         sum_ids = ao.where(valid, t, co.izero)
         vals = ao.where(valid, vals, co.zero)
-        ao.scatter_add_inplace(ret, -1, sum_ids, vals)
+        ret = ao.scatter_add_inplace(ret, -1, sum_ids, vals)
         return ret
 
     def calc_c_array2(self, other):
@@ -591,7 +591,7 @@ class CartGtoPrimPair:
         ret = ao.zeros(full_sz[:-1])
         sum_ids = ao.broadcast_to(iiflat.reshape(1, -1), h_vals_flat.shape)
         # ret.scatter_add_(dim=-1, index=sum_ids, src=h_vals_flat)
-        ao.scatter_add_inplace(ret, -1, sum_ids, h_vals_flat)
+        ret = ao.scatter_add_inplace(ret, -1, sum_ids, h_vals_flat)
         return ret
     # end def calc_h_array(self):
 
@@ -665,7 +665,10 @@ class CartGtoPrimPair:
                 i = 2 * q + t
                 r = q - u
                 coeff = co.parity[(u + t) % 2] * co.binom22(i, r, u)
-                ans[:, u : u + n] += (
+                ans = ao.slice_add(
+                    ans,
+                    1,
+                    u,
                     bipres[:, 2 * q : 2 * q + n]
                     * coeff[None, :]
                     * inv_4g_pows[:, q][:, None]
@@ -766,7 +769,7 @@ class CartGtoPrimPair:
             inv_u = qp_inv_pows[:, :, u][:, :, None]            # qp^{-u}
             b_su = b2[2 * u : 2 * u + n, u][None,None,:] #.view(1, 1, n)
 
-            ans[:, :, u : u + n] += sign_u * C_s * b_su * inv_u * pow_i
+            ans = ao.slice_add(ans, 2, u, sign_u * C_s * b_su * inv_u * pow_i)
 
         # ---- Fix missing qp==0 cancellation terms (k==0 => s=2u, i=u)
         umax0 = min(U, S // 2)
@@ -790,7 +793,7 @@ class CartGtoPrimPair:
             corr = (sign_u[None,None,:] * C_diag * b_diag * invd_u)
             corr = corr * qp_is_zero[...,None]
 
-            ao.index_add_inplace(ans, 2, uvals, corr)
+            ans = ao.index_add_inplace(ans, 2, uvals, corr)
 
         return ans
 

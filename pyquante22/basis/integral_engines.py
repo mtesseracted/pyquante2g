@@ -148,7 +148,7 @@ class IntegralEngineBase:
     #end def build_eri_4d_sh(self):
 
 
-    def build_eri_4d_batch(self, batch_size=64, store=True):
+    def build_eri_4d_batch(self, batch_size=int(2*10), store=True):
         """build dense eri with batch"""
         basis = self.basis
         nbf = self.basis.nbf
@@ -173,7 +173,7 @@ class IntegralEngineBase:
         return eri4d
 
 
-    def iter_eri_batch(self, batch_size=64):
+    def iter_eri_batch(self, batch_size=int(2**10)):
         """Yield ((shell_slices), (ao_slices)) in row-major batching order."""
         basis = self.basis
         nbf = basis.nbf
@@ -262,7 +262,7 @@ class IntegralEngineBase:
                             slice(k, k + 1),
                             sl,
                         )
-
+    #end def iter_eri_batch(self, batch_size=int(2**10)):
 
 
     def build_j_dense(self, density, eri=None):

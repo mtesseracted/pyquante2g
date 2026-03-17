@@ -1,7 +1,6 @@
 import pytest
 import pyquante22.array_ops as arr
-from tests.array_ops.conftest import backend, ftype, itype
-import importlib
+from tests.array_ops.conftest import backend, ftype, itype, import_backend_dtypes_module
 
 
 def test_core(backend):
@@ -25,7 +24,7 @@ def test_invalid():
 
 
 def test_default_dtype(backend, ftype):
-    m = importlib.import_module(backend)
+    m = import_backend_dtypes_module(backend)
     mdtype = getattr(m, ftype, None)
     if mdtype is None:
         pytest.skip(f"No {ftype} in {backend}")
@@ -34,7 +33,7 @@ def test_default_dtype(backend, ftype):
 
 
 def test_int_dtype(backend, itype,):
-    m = importlib.import_module(backend)
+    m = import_backend_dtypes_module(backend)
     mdtype = getattr(m, itype, None)
     if mdtype is None:
         pytest.skip(f"No {itype} in {backend}")

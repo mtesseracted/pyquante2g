@@ -220,11 +220,6 @@ class CartShellBatch():
         """all primitives in this shell as one CartGtoPrim"""
         if all(sh.bfs_ is None for sh in self.shells): # none instantiated, build from scratch
             ao = self.ao
-            sz = len(self)
-            amoms = ao.zeros((sz, 3), dtype=ao.int_dtype)
-            cens = ao.zeros((sz, 3))
-            alphas = ao.zeros((sz,))
-            coeffs = ao.zeros((sz,))
             am_tots = set([sh.amtot for sh in self.shells])
             am_lists = {
                 (amt, order): gen_cartesian_momentums(amt, order=order)
@@ -232,15 +227,22 @@ class CartShellBatch():
                 for order in {sh.cart_order for sh in self.shells if sh.amtot == amt}
             }
 
-            icnt = 0
+            amoms_parts = []
+            cens_parts = []
+            alphas_parts = []
+            coeffs_parts = []
             for sh in self.shells:
                 sz = len(sh)
                 ams = ao.arr(am_lists[(sh.amtot, sh.cart_order)], dtype=ao.int_dtype)
-                amoms[icnt:icnt+sz] = ao.tile(ams, (1,sh.npf)).reshape(-1,3)
-                cens[icnt:icnt+sz] = ao.tile(sh.cen, (sz, 1))
-                alphas[icnt:icnt+sz] = ao.tile(sh.alphas, (sh.nbf,1)).reshape(-1)
-                coeffs[icnt:icnt+sz] = ao.tile(sh.coeffs, (sh.nbf,1)).reshape(-1)
-                icnt += sz
+                amoms_parts.append(ao.tile(ams, (1, sh.npf)).reshape(-1, 3))
+                cens_parts.append(ao.tile(sh.cen, (sz, 1)))
+                alphas_parts.append(ao.tile(sh.alphas, (sh.nbf, 1)).reshape(-1))
+                coeffs_parts.append(ao.tile(sh.coeffs, (sh.nbf, 1)).reshape(-1))
+
+            amoms = ao.concat(amoms_parts, axis=0)
+            cens = ao.concat(cens_parts, axis=0)
+            alphas = ao.concat(alphas_parts, axis=0)
+            coeffs = ao.concat(coeffs_parts, axis=0)
 
             return CartGtoPrim(amom=amoms, cen=cens, alpha=alphas, 
                                 coeffs=coeffs, ao=self.ao)

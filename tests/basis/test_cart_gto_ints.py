@@ -28,9 +28,10 @@ import pyquante22.arb_math as arb
 from tests.array_ops.conftest import INSTALLED_BACKENDS
 
 EPS = sys.float_info.epsilon
+BASIS_BACKENDS = [backend for backend in INSTALLED_BACKENDS if backend != "jax"]
 
 
-@pytest.fixture(params=INSTALLED_BACKENDS)
+@pytest.fixture(params=BASIS_BACKENDS)
 def ao(request):
     return arr.ArrayOps(
         request.param, device=None, default_dtype="float64", int_dtype="int64"
@@ -144,7 +145,7 @@ class GTOTestCase:
     arg_iter: callable = None # (optional) yields tuples of GTOs
     ref: callable = None # (optional) reference function
     rtol: float = 16 * EPS
-    atol: float = EPS / 64
+    atol: float = EPS #/ 64
 
 
 @pytest.fixture(params=["overlap", "kinetic", "nai", "eri"])

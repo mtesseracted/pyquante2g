@@ -27,6 +27,8 @@ def _to_numpy(x):
         x = x.detach()
     if hasattr(x, "cpu"):
         x = x.cpu()
+    if hasattr(x, "get"):
+        x = x.get()
     if hasattr(x, "numpy"):
         return x.numpy()
     return np.asarray(x)

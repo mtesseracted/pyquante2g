@@ -70,7 +70,7 @@ cupy is questionable?, tf.function()
 ### For v0 publication:
 - Finish the RHF example: 12Mar26, some examples there, need to clean up
 - Make an example that uses backprop to do something (back prop to atom positions?)
-- add one more gpu backend, (cupy for speed)
+- add one more gpu backend, (cupy/jax for speed)
 - add benchmarks
     - benchmark vs a straight integral engine
 

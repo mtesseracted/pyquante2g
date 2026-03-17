@@ -43,6 +43,7 @@ tile_ops = ["tile"]
 stack_ops = ["stack", "concat"]
 where_ops = ["where"]
 take_ops = ["take_along_axis"]
+slice_ops = ["slice_add"]
 scatter_ops = ["scatter_add", "scatter_add_inplace", "index_add_inplace"]
 pad_ops = ["pad"]
 flip_ops = ["flip"]
@@ -79,6 +80,7 @@ OPS_BY_SIGNATURE = {
     "stack": stack_ops,
     "where": where_ops,
     "take": take_ops,
+    "slice": slice_ops,
     "scatter": scatter_ops,
     "pad": pad_ops,
     "flip": flip_ops,
@@ -110,6 +112,7 @@ manipulation_ops = (
     + stack_ops
     + where_ops
     + take_ops
+    + slice_ops
     + scatter_ops
     + pad_ops
     + flip_ops
@@ -217,6 +220,18 @@ class ArrayBackend:
         combs = list(_combinations(seq, r))
         return self.asarray(combs, dtype=x.dtype)
 
+    def slice_add(self, x, axis, start, src):
+        axis = axis % x.ndim
+        start = int(start)
+        stop = start + src.shape[axis]
+        if start < 0 or stop > x.shape[axis]:
+            raise ValueError("slice_add source does not fit in destination")
+
+        dst_sel = [slice(None)] * x.ndim
+        dst_sel[axis] = slice(start, stop)
+        x[tuple(dst_sel)] += src
+        return x
+
     # ---------- other ----------
 
     def conv_full_batch(self, a, b):
@@ -232,6 +247,8 @@ def _make_op(name):
     return op
 
 for _name in basic_ops:
+    if hasattr(ArrayBackend, _name):
+        continue
     setattr(ArrayBackend, _name, _make_op(_name))
 
 
@@ -241,6 +258,8 @@ def _load_backend(name,):
     name = name.lower()
     if name == "numpy":
         from . import numpy as m
+    elif name == "jax":
+        from . import jax as m
     elif name in ("torch", "pytorch"):
         from . import torch as m
     elif name == "cupy":

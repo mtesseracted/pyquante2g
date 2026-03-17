@@ -11,6 +11,9 @@ from pyquante22.basis.integral_engines import IntegralEngineBase
 from pyquante22.utils.file_utils import find_closest_file_match, load_gbs_file
 from tests.array_ops.conftest import INSTALLED_BACKENDS
 
+BACKENDS = [backend for backend in INSTALLED_BACKENDS if backend != "jax"]
+
+
 try:
     from pyscf import gto
     HAS_PYSCF = True
@@ -23,6 +26,8 @@ def _to_numpy(x):
         x = x.detach()
     if hasattr(x, "cpu"):
         x = x.cpu()
+    if hasattr(x, "get"):
+        x = x.get()
     if hasattr(x, "numpy"):
         return x.numpy()
     return np.asarray(x)
@@ -88,7 +93,7 @@ def eri_case(request):
     return request.param
 
 
-@pytest.fixture(params=INSTALLED_BACKENDS)
+@pytest.fixture(params=BACKENDS)
 def ao(request):
     return arr.ArrayOps(
         request.param, device=None, default_dtype="float64", int_dtype="int64"

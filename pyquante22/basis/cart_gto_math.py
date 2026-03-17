@@ -130,41 +130,23 @@ class GtoMath:
         """boys function for float32 piecewise splits"""
         ao = self.ao
         xsw, msw = 0.5, 26
-        ret = ao.zeros((x.shape[0], m.shape[1]))
-
         row_small = x[:, 0] < xsw
-        row_rest = ~row_small
         col_large = m[0, :] > msw
-        col_rest = ~col_large
-
-        if ao.any(row_small):
-            ret[row_small, :] = self.fboys_series(m, x[row_small, :], max_terms=8)
-
-        if ao.any(row_rest):
-            rr = ao.where(row_rest)[0]
-            xr = x[row_rest, :]
-            if ao.any(col_large):
-                cc = ao.where(col_large)[0]
-                ret[rr[:, None], cc[None, :]] = self.fboys_large_m(m[:, col_large], xr, max_terms=12)
-            if ao.any(col_rest):
-                cc = ao.where(col_rest)[0]
-                ret[rr[:, None], cc[None, :]] = self.fboys_igamma(m[:, col_rest], xr)
-
-        return ret
+        series_vals = self.fboys_series(m, x, max_terms=8)
+        large_vals = self.fboys_large_m(m, x, max_terms=12)
+        igamma_vals = self.fboys_igamma(m, x)
+        rest_vals = ao.where(col_large[None, :], large_vals, igamma_vals)
+        return ao.where(row_small[:, None], series_vals, rest_vals)
 
 
     def fboys_float64(self, m, x):  # 
         """boys function for float64 piecewise splits"""
         ao = self.ao
         xsw = 0.1
-        ret = ao.zeros((x.shape[0], m.shape[1]), dtype=x.dtype)
         row_small = x[:, 0] < xsw
-        row_rest = ~row_small
-        if ao.any(row_small):
-            ret[row_small, :] = self.fboys_series(m, x[row_small, :], max_terms=8)
-        if ao.any(row_rest):
-            ret[row_rest, :] = self.fboys_igamma(m, x[row_rest, :])
-        return ret
+        series_vals = self.fboys_series(m, x, max_terms=8)
+        igamma_vals = self.fboys_igamma(m, x)
+        return ao.where(row_small[:, None], series_vals, igamma_vals)
 
 
     def fboys_igamma(self, m, x):  # unstable @ x=0 and large m
@@ -283,11 +265,11 @@ class GtoMath:
         f0 = self.fboys_m0(t)
         expmt, inv2t = ao.exp(-t), 0.5 / t
 
-        F = ao.zeros((mmax + 1, t.shape[0]), dtype=t.dtype)
-        F[0] = f0
+        rows = [f0]
         for k in range(mmax):
-            F[k + 1] = ((2.0 * k + 1.0) * F[k] - expmt) * inv2t
+            rows.append(((2.0 * k + 1.0) * rows[-1] - expmt) * inv2t)
 
+        F = ao.stack(rows, axis=0)
         col = ao.arange(t.shape[0], dtype=ao.int_dtype)
         return F[idx, col].reshape(shp)
 
@@ -315,11 +297,12 @@ class GtoMath:
         for k in range(M - 1, mmax, -1): # recurse down from the margin
             fk = (two_t * fk + e) / (2.0 * k + 1.0)
 
-        F = ao.zeros((mmax + 1, n), dtype=t.dtype)
+        rows = []
         for k in range(mmax, -1, -1):
             fk = (two_t * fk + e) / (2.0 * k + 1.0)
-            F[k] = fk
+            rows.append(fk)
 
+        F = ao.stack(list(reversed(rows)), axis=0)
         F *= (f0 / F[0])[None, :]
         col = ao.arange(n, dtype=ao.int_dtype)
         return F[idx, col].reshape(shp)

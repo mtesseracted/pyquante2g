@@ -1,16 +1,8 @@
-"""Benchmark pyquante22 integrals against libcint through the PySCF interface.
+"""Benchmark direct shell/block integral calls against libcint via PySCF.
 
-This tries to stay as close to a 1:1 comparison as possible:
-- both sides use the same molecule geometry and basis data from this repo
-- both sides use Cartesian shells with PySCF ordering
-- AO ordering is verified before timing
-- timing excludes molecule/basis construction and focuses on integral builds
-
-Because PySCF/libcint returns unnormalized Cartesian AOs while pyquante22
-returns normalized contracted AOs, the report includes two libcint timings:
-- `libcint raw`: just the `pmol.intor(...)` calls
-- `libcint matched`: raw integrals plus the normalization needed to match
-  pyquante22's output convention
+This intentionally avoids dense matrix/tensor builds. It compares individual
+shell-pair and shell-quartet evaluations so the benchmark stays focused on the
+integral kernels you actually have implemented.
 """
 
 from __future__ import annotations
@@ -29,7 +21,6 @@ import pyquante22.array_ops as arr
 from pyquante22.atoms.molecule import load_sample_molecule
 from pyquante22.basis.basisset import BasisSet
 from pyquante22.basis.cart_gto_utils import cartPow2fullSym, sym2am
-from pyquante22.basis.integral_engines import IntegralEngineBase
 from pyquante22.utils.file_utils import find_closest_file_match, load_gbs_file
 
 try:
@@ -38,6 +29,13 @@ try:
     HAS_PYSCF = True
 except ImportError:
     HAS_PYSCF = False
+
+
+ONE_E_INTORS = {
+    "overlap": "int1e_ovlp_cart",
+    "kinetic": "int1e_kin_cart",
+    "nuclear": "int1e_nuc_cart",
+}
 
 
 @dataclass
@@ -71,9 +69,9 @@ class BenchmarkDefaults:
     cases: list[tuple[str, str]]
     backend: str = "numpy"
     device: str | None = None
-    tasks: tuple[str, ...] = ("one", "eri")
-    eri_method: str = "sh"
-    batch_size: int = 2**20
+    integrals: tuple[str, ...] = ("overlap", "kinetic", "nuclear", "eri")
+    shell_pairs: list[tuple[int, int]] | None = None
+    shell_quartets: list[tuple[int, int, int, int]] | None = None
     warmups: int = 1
     repeats: int = 3
     rtol: float = 1e-10
@@ -92,55 +90,57 @@ def parse_args(defaults: BenchmarkDefaults) -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         default=defaults.backend,
-        help="pyquante22 ArrayOps backend for the engine benchmark. Default: numpy",
+        help="pyquante22 ArrayOps backend for the benchmark",
     )
     parser.add_argument(
         "--device",
         default=defaults.device,
-        help="ArrayOps device, e.g. cpu or cuda:0. Default: backend default",
+        help="ArrayOps device, e.g. cpu or cuda:0",
     )
     parser.add_argument(
-        "--tasks",
+        "--integrals",
         nargs="+",
-        choices=("one", "eri"),
-        default=defaults.tasks,
-        help="Which integral groups to benchmark. Default: one eri",
+        choices=("overlap", "kinetic", "nuclear", "eri"),
+        default=defaults.integrals,
+        help="Integral kernels to benchmark",
     )
     parser.add_argument(
-        "--eri-method",
-        choices=("sh", "batch", "bf"),
-        default=defaults.eri_method,
-        help="pyquante22 ERI builder to benchmark. Default: sh",
+        "--shell-pair",
+        action="append",
+        default=[],
+        metavar="I,J",
+        help="Shell pair for one-electron blocks, may be passed multiple times",
     )
     parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=defaults.batch_size,
-        help="Batch size for --eri-method batch. Default: 1048576",
+        "--shell-quartet",
+        action="append",
+        default=[],
+        metavar="I,J,K,L",
+        help="Shell quartet for ERI blocks, may be passed multiple times",
     )
     parser.add_argument(
         "--warmups",
         type=int,
         default=defaults.warmups,
-        help="Warmup runs before timing. Default: 1",
+        help="Warmup runs before timing",
     )
     parser.add_argument(
         "--repeats",
         type=int,
         default=defaults.repeats,
-        help="Timed repetitions per benchmark. Default: 3",
+        help="Timed repetitions per benchmark",
     )
     parser.add_argument(
         "--rtol",
         type=float,
         default=defaults.rtol,
-        help="Relative tolerance for accuracy checks. Default: 1e-10",
+        help="Relative tolerance for accuracy checks",
     )
     parser.add_argument(
         "--atol",
         type=float,
         default=defaults.atol,
-        help="Absolute tolerance for accuracy checks. Default: 1e-12",
+        help="Absolute tolerance for accuracy checks",
     )
     return parser.parse_args()
 
@@ -162,6 +162,32 @@ def parse_cases(
             raise ValueError(f"Invalid --case '{raw}'. Expected BASIS:MOLECULE")
         cases.append((basis_name, sample_name))
     return cases
+
+
+def parse_index_tuple(raw: str, size: int) -> tuple[int, ...]:
+    parts = [part.strip() for part in raw.split(",")]
+    if len(parts) != size:
+        raise ValueError(f"Expected {size} comma-separated indices, got '{raw}'")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer tuple '{raw}'") from exc
+
+
+def choose_shell_pairs(
+    cli_values: list[str], default_values: list[tuple[int, int]] | None
+) -> list[tuple[int, int]]:
+    if cli_values:
+        return [parse_index_tuple(raw, 2) for raw in cli_values]
+    return list(default_values or [])
+
+
+def choose_shell_quartets(
+    cli_values: list[str], default_values: list[tuple[int, int, int, int]] | None
+) -> list[tuple[int, int, int, int]]:
+    if cli_values:
+        return [parse_index_tuple(raw, 4) for raw in cli_values]
+    return list(default_values or [])
 
 
 def _to_numpy(x):
@@ -225,41 +251,9 @@ def assert_ao_ordering_matches(basis: BasisSet, pmol) -> None:
             )
 
 
-def normalize_one_electron(s_raw, t_raw, v_raw):
-    sn = 1.0 / np.sqrt(np.diag(s_raw))
-    s_ref = np.einsum("i,ij,j->ij", sn, s_raw, sn)
-    t_ref = np.einsum("i,ij,j->ij", sn, t_raw, sn)
-    v_ref = np.einsum("i,ij,j->ij", sn, v_raw, sn)
-    return s_ref, t_ref, v_ref
-
-
-def normalize_eri(eri_raw, sn):
-    eri = eri_raw
-    eri = eri * sn[:, None, None, None]
-    eri = eri * sn[None, :, None, None]
-    eri = eri * sn[None, None, :, None]
-    eri = eri * sn[None, None, None, :]
-    return eri
-
-
-def summarize_diff(ours, ref, atol: float) -> TensorDiff:
-    a = _to_numpy(ours)
-    b = np.asarray(ref)
-    diff = np.abs(a - b)
-    idx_abs = tuple(int(i) for i in np.unravel_index(np.argmax(diff), diff.shape))
-    max_abs = float(diff[idx_abs])
-    rel = diff / np.maximum(np.abs(b), atol)
-    max_rel = float(rel.max())
-    return TensorDiff(
-        max_abs=max_abs,
-        max_rel=max_rel,
-        idx=idx_abs,
-        ours=float(a[idx_abs]),
-        ref=float(b[idx_abs]),
-    )
-
-
-def benchmark_call(fn: Callable[[], object], warmups: int, repeats: int) -> tuple[BenchmarkStats, object]:
+def benchmark_call(
+    fn: Callable[[], object], warmups: int, repeats: int
+) -> tuple[BenchmarkStats, object]:
     for _ in range(warmups):
         fn()
 
@@ -283,7 +277,7 @@ def benchmark_call(fn: Callable[[], object], warmups: int, repeats: int) -> tupl
 
 def print_stats(label: str, stats: BenchmarkStats) -> None:
     print(
-        f"  {label:<18} best={stats.best:9.4f}s "
+        f"  {label:<12} best={stats.best:9.4f}s "
         f"median={stats.median:9.4f}s mean={stats.mean:9.4f}s"
     )
 
@@ -291,113 +285,185 @@ def print_stats(label: str, stats: BenchmarkStats) -> None:
 def print_diff(label: str, diff: TensorDiff, ok: bool) -> None:
     verdict = "ok" if ok else "mismatch"
     print(
-        f"  {label:<18} {verdict:<8} "
+        f"  {label:<12} {verdict:<8} "
         f"max_abs={diff.max_abs:10.3e} max_rel={diff.max_rel:10.3e} "
         f"@{diff.idx} ours={diff.ours: .6e} ref={diff.ref: .6e}"
     )
 
 
-def run_one_electron_case(ie: IntegralEngineBase, pmol, args: argparse.Namespace) -> None:
-    print(" one-electron")
+def summarize_diff(ours, ref, atol: float) -> TensorDiff:
+    a = _to_numpy(ours)
+    b = np.asarray(ref)
+    diff = np.abs(a - b)
+    idx_abs = tuple(int(i) for i in np.unravel_index(np.argmax(diff), diff.shape))
+    max_abs = float(diff[idx_abs])
+    rel = diff / np.maximum(np.abs(b), atol)
+    max_rel = float(rel.max())
+    return TensorDiff(
+        max_abs=max_abs,
+        max_rel=max_rel,
+        idx=idx_abs,
+        ours=float(a[idx_abs]),
+        ref=float(b[idx_abs]),
+    )
 
-    engine_stats, (s_ours, t_ours, v_ours) = benchmark_call(
-        lambda: ie.build_one_electron_matrices(store=False),
+
+def resolve_shell_indices(idxs: tuple[int, ...], nsh: int) -> tuple[int, ...]:
+    resolved = []
+    for idx in idxs:
+        if idx < 0:
+            idx += nsh
+        if idx < 0 or idx >= nsh:
+            raise IndexError(f"Shell index {idx} out of range for nsh={nsh}")
+        resolved.append(idx)
+    return tuple(resolved)
+
+
+def get_shell_norms(pmol, sh_idx: int, cache: dict[int, np.ndarray]) -> np.ndarray:
+    if sh_idx not in cache:
+        block = np.asarray(pmol.intor_by_shell("int1e_ovlp_cart", (sh_idx, sh_idx)))
+        cache[sh_idx] = 1.0 / np.sqrt(np.diag(block))
+    return cache[sh_idx]
+
+
+def normalize_one_electron_block(block, norm_i: np.ndarray, norm_j: np.ndarray):
+    return np.einsum("i,ij,j->ij", norm_i, np.asarray(block), norm_j)
+
+
+def normalize_eri_block(
+    block,
+    norm_i: np.ndarray,
+    norm_j: np.ndarray,
+    norm_k: np.ndarray,
+    norm_l: np.ndarray,
+):
+    eri = np.asarray(block)
+    eri = eri * norm_i[:, None, None, None]
+    eri = eri * norm_j[None, :, None, None]
+    eri = eri * norm_k[None, None, :, None]
+    eri = eri * norm_l[None, None, None, :]
+    return eri
+
+
+def calc_shell_pair_block(shell_i, shell_j, integral: str, rcen=None, charges=None):
+    sp = shell_i * shell_j
+    ao = sp.ao
+    gp = sp.bfs
+
+    ci = gp.ga.coeffs.reshape(shell_i.nbf, shell_i.npf)
+    cj = gp.gb.coeffs.reshape(shell_j.nbf, shell_j.npf)
+
+    if integral == "overlap":
+        prim_vals = gp.calc_overlap()
+    elif integral == "kinetic":
+        prim_vals = gp.calc_kinetic()
+    elif integral == "nuclear":
+        prim_vals = gp.calc_nai(rcen)
+        prim_vals = ao.einsum("ijc,c->ij", prim_vals, charges)
+    else:
+        raise ValueError(f"Unsupported one-electron integral '{integral}'")
+
+    prim_vals = prim_vals.reshape(shell_i.nbf, shell_i.npf, shell_j.nbf, shell_j.npf)
+    return ao.einsum("iajb,ia,jb->ij", prim_vals, ci, cj)
+
+
+def calc_shell_quartet_block(shell_i, shell_j, shell_k, shell_l):
+    return (shell_i * shell_j) | (shell_k * shell_l)
+
+
+def run_one_electron_benchmark(
+    basis: BasisSet,
+    pmol,
+    args: argparse.Namespace,
+    shell_pair: tuple[int, int],
+    integral: str,
+    rcen,
+    charges,
+    norm_cache: dict[int, np.ndarray],
+) -> None:
+    i, j = resolve_shell_indices(shell_pair, basis.nsh)
+    shell_i = basis.shells[i]
+    shell_j = basis.shells[j]
+
+    print(f" {integral} shells={i,j}")
+    engine_stats, ours = benchmark_call(
+        lambda: calc_shell_pair_block(shell_i, shell_j, integral, rcen=rcen, charges=charges),
         warmups=args.warmups,
         repeats=args.repeats,
     )
-    libcint_raw_stats, (s_raw, t_raw, v_raw) = benchmark_call(
-        lambda: (
-            pmol.intor("int1e_ovlp_cart"),
-            pmol.intor("int1e_kin_cart"),
-            pmol.intor("int1e_nuc_cart"),
-        ),
+    libcint_stats, ref_raw = benchmark_call(
+        lambda: pmol.intor_by_shell(ONE_E_INTORS[integral], (i, j)),
         warmups=args.warmups,
         repeats=args.repeats,
     )
-    libcint_matched_stats, (s_ref, t_ref, v_ref) = benchmark_call(
-        lambda: normalize_one_electron(
-            pmol.intor("int1e_ovlp_cart"),
-            pmol.intor("int1e_kin_cart"),
-            pmol.intor("int1e_nuc_cart"),
-        ),
-        warmups=args.warmups,
-        repeats=args.repeats,
-    )
+
+    norm_i = get_shell_norms(pmol, i, norm_cache)
+    norm_j = get_shell_norms(pmol, j, norm_cache)
+    ref = normalize_one_electron_block(ref_raw, norm_i, norm_j)
 
     print_stats("pyquante22", engine_stats)
-    print_stats("libcint raw", libcint_raw_stats)
-    print_stats("libcint matched", libcint_matched_stats)
-    print(
-        f"  speedup vs raw      x{libcint_raw_stats.median / engine_stats.median:8.3f}"
-    )
-    print(
-        f"  speedup vs matched  x{libcint_matched_stats.median / engine_stats.median:8.3f}"
-    )
+    print_stats("libcint", libcint_stats)
+    print(f"  speedup      x{libcint_stats.median / engine_stats.median:8.3f}")
 
-    h_ours = _to_numpy(t_ours) + _to_numpy(v_ours)
-    h_ref = t_ref + v_ref
-    s_diff = summarize_diff(s_ours, s_ref, args.atol)
-    t_diff = summarize_diff(t_ours, t_ref, args.atol)
-    v_diff = summarize_diff(v_ours, v_ref, args.atol)
-    h_diff = summarize_diff(h_ours, h_ref, args.atol)
-
-    print_diff("S", s_diff, np.allclose(_to_numpy(s_ours), s_ref, rtol=args.rtol, atol=args.atol))
-    print_diff("T", t_diff, np.allclose(_to_numpy(t_ours), t_ref, rtol=args.rtol, atol=args.atol))
-    print_diff("V", v_diff, np.allclose(_to_numpy(v_ours), v_ref, rtol=args.rtol, atol=args.atol))
-    print_diff("H=T+V", h_diff, np.allclose(h_ours, h_ref, rtol=args.rtol, atol=args.atol))
-
-
-def build_eri_runner(ie: IntegralEngineBase, args: argparse.Namespace) -> Callable[[], object]:
-    if args.eri_method == "sh":
-        return lambda: ie.build_eri_4d_sh(store=False)
-    if args.eri_method == "bf":
-        return lambda: ie.build_eri_4d_bf(store=False)
-    if args.eri_method == "batch":
-        return lambda: ie.build_eri_4d_batch(batch_size=args.batch_size, store=False)
-    raise ValueError(f"Unsupported ERI method: {args.eri_method}")
-
-
-def run_eri_case(ie: IntegralEngineBase, pmol, args: argparse.Namespace) -> None:
-    print(f" eri ({args.eri_method})")
-    eri_runner = build_eri_runner(ie, args)
-
-    engine_stats, eri_ours = benchmark_call(
-        eri_runner,
-        warmups=args.warmups,
-        repeats=args.repeats,
-    )
-    libcint_raw_stats, eri_raw = benchmark_call(
-        lambda: pmol.intor("int2e_cart"),
-        warmups=args.warmups,
-        repeats=args.repeats,
-    )
-    s_raw = pmol.intor("int1e_ovlp_cart")
-    sn = 1.0 / np.sqrt(np.diag(s_raw))
-    libcint_matched_stats, eri_ref = benchmark_call(
-        lambda: normalize_eri(pmol.intor("int2e_cart"), sn),
-        warmups=args.warmups,
-        repeats=args.repeats,
-    )
-
-    print_stats("pyquante22", engine_stats)
-    print_stats("libcint raw", libcint_raw_stats)
-    print_stats("libcint matched", libcint_matched_stats)
-    print(
-        f"  speedup vs raw      x{libcint_raw_stats.median / engine_stats.median:8.3f}"
-    )
-    print(
-        f"  speedup vs matched  x{libcint_matched_stats.median / engine_stats.median:8.3f}"
-    )
-
-    eri_diff = summarize_diff(eri_ours, eri_ref, args.atol)
+    diff = summarize_diff(ours, ref, args.atol)
     print_diff(
-        "ERI",
-        eri_diff,
-        np.allclose(_to_numpy(eri_ours), eri_ref, rtol=args.rtol, atol=args.atol),
+        integral,
+        diff,
+        np.allclose(_to_numpy(ours), ref, rtol=args.rtol, atol=args.atol),
     )
 
 
-def run_case(case: tuple[str, str], args: argparse.Namespace) -> None:
+def run_eri_benchmark(
+    basis: BasisSet,
+    pmol,
+    args: argparse.Namespace,
+    shell_quartet: tuple[int, int, int, int],
+    norm_cache: dict[int, np.ndarray],
+) -> None:
+    i, j, k, l = resolve_shell_indices(shell_quartet, basis.nsh)
+    shell_i = basis.shells[i]
+    shell_j = basis.shells[j]
+    shell_k = basis.shells[k]
+    shell_l = basis.shells[l]
+
+    print(f" eri shells={i,j,k,l}")
+    engine_stats, ours = benchmark_call(
+        lambda: calc_shell_quartet_block(shell_i, shell_j, shell_k, shell_l),
+        warmups=args.warmups,
+        repeats=args.repeats,
+    )
+    libcint_stats, ref_raw = benchmark_call(
+        lambda: pmol.intor_by_shell("int2e_cart", (i, j, k, l)),
+        warmups=args.warmups,
+        repeats=args.repeats,
+    )
+
+    ref = normalize_eri_block(
+        ref_raw,
+        get_shell_norms(pmol, i, norm_cache),
+        get_shell_norms(pmol, j, norm_cache),
+        get_shell_norms(pmol, k, norm_cache),
+        get_shell_norms(pmol, l, norm_cache),
+    )
+
+    print_stats("pyquante22", engine_stats)
+    print_stats("libcint", libcint_stats)
+    print(f"  speedup      x{libcint_stats.median / engine_stats.median:8.3f}")
+
+    diff = summarize_diff(ours, ref, args.atol)
+    print_diff(
+        "eri",
+        diff,
+        np.allclose(_to_numpy(ours), ref, rtol=args.rtol, atol=args.atol),
+    )
+
+
+def run_case(
+    case: tuple[str, str],
+    args: argparse.Namespace,
+    shell_pairs: list[tuple[int, int]],
+    shell_quartets: list[tuple[int, int, int, int]],
+) -> None:
     basis_name, sample_name = case
     ao = arr.ArrayOps(
         args.backend,
@@ -408,50 +474,77 @@ def run_case(case: tuple[str, str], args: argparse.Namespace) -> None:
 
     mol = load_sample_molecule(sample_name, ao=ao)
     basis = BasisSet(mol, name=basis_name, cart_order="pyscf")
-    ie = IntegralEngineBase(basis)
     pmol = build_pyscf_mol(mol, basis_name)
     assert_ao_ordering_matches(basis, pmol)
+
+    norm_cache: dict[int, np.ndarray] = {}
+    rcen = ao.stack([atom.r for atom in mol.atoms])
+    charges = ao.arr([atom.Z for atom in mol.atoms])
 
     print()
     print(f"=== {sample_name} / {basis_name} ===")
     print(
-        f" nbf={basis.nbf} nsh={basis.nsh} prims={basis.size} "
-        f"charge={mol.charge} multiplicity={mol.multiplicity}"
+        f" nbf={basis.nbf} nsh={basis.nsh} backend={args.backend} "
+        f"device={args.device}"
     )
 
-    if "one" in args.tasks:
-        run_one_electron_case(ie, pmol, args)
-    if "eri" in args.tasks:
-        run_eri_case(ie, pmol, args)
+    for integral in args.integrals:
+        if integral == "eri":
+            for shell_quartet in shell_quartets:
+                run_eri_benchmark(basis, pmol, args, shell_quartet, norm_cache)
+            continue
+
+        for shell_pair in shell_pairs:
+            run_one_electron_benchmark(
+                basis,
+                pmol,
+                args,
+                shell_pair,
+                integral,
+                rcen,
+                charges,
+                norm_cache,
+            )
 
 
 def main(defaults: BenchmarkDefaults) -> int:
     args = parse_args(defaults)
     cases = parse_cases(args.case, defaults.cases)
+    shell_pairs = choose_shell_pairs(args.shell_pair, defaults.shell_pairs)
+    shell_quartets = choose_shell_quartets(args.shell_quartet, defaults.shell_quartets)
 
     if not HAS_PYSCF:
         print("PySCF is not available. Install it to benchmark against libcint.")
         print("Suggested command: python3 -m pip install pyscf")
         return 1
 
+    if any(name in args.integrals for name in ("overlap", "kinetic", "nuclear")) and not shell_pairs:
+        raise ValueError("No shell pairs configured for one-electron benchmarks")
+    if "eri" in args.integrals and not shell_quartets:
+        raise ValueError("No shell quartets configured for ERI benchmarks")
+
     for case in cases:
-        run_case(case, args)
+        run_case(case, args, shell_pairs, shell_quartets)
     return 0
 
 
 if __name__ == "__main__":
     defaults = BenchmarkDefaults(
         cases=[
-            # ("sto-3g", "Hydrogen"),
-            ("sto-3g", "Water"),
-            # ("sto-3g", "Methane"),
-            ("aug-cc-pvdz", "Water"),
+            ("aug-cc-pVQZ", "Cyclobutadiene"),
         ],
-        backend="torch",
+        backend="cupy",
         device="cuda:0",
-        tasks=("one", "eri"),
-        eri_method="sh",
-        batch_size=2**20,
+        integrals=("eri",),
+        shell_pairs=[],
+        shell_quartets=[
+            # aug-cc-pVQZ carbon shells are
+            # S,S,S,S,S,S,P,P,P,P,P,D,D,D,D,F,F,F,G,G
+            # Cyclobutadiene starts with 4 carbon atoms, so these are G shells
+            # on four different atoms.
+            (18, 38, 58, 78),
+            (19, 39, 59, 79),
+        ],
         warmups=1,
         repeats=3,
         rtol=1e-10,

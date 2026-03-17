@@ -77,6 +77,9 @@ class NumpyBackend(ArrayBackend):
         out = np.einsum("bgiok,gcik->bgco", windows, weight)
         return out.reshape(batch, cout, out_w)
 
+    def slice_add(self, x, axis, start, src):
+        return super().slice_add(x, axis, start, src)
+
     def scatter_add(self, x, axis, index, src):
         axis = axis % x.ndim
         out = x.copy()

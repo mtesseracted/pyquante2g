@@ -1,4 +1,5 @@
 import pytest
+import importlib
 import importlib.util
 from tests.array_ops.helpers import get_gpu0
 
@@ -21,22 +22,36 @@ def itype(request):
 # Map nicknames to module names 
 CPU_BACKENDS = {"numpy": "numpy",}
 GPU_BACKENDS = {
-    # "jax": "jax",
-    # "cupy": "cupy",
+    "jax": "jax",
+    "cupy": "cupy",
     "torch": "torch",
     # "tensorflow": "tensorflow",
 }
+GPU_REQUIRED_BACKENDS = {"cupy"}
 ALL_BACKENDS = {**CPU_BACKENDS, **GPU_BACKENDS}
+BACKEND_DTYPE_MODULES = {"jax": "jax.numpy"}
+
+
+def import_backend_dtypes_module(backend):
+    modname = BACKEND_DTYPE_MODULES.get(backend, backend)
+    return importlib.import_module(modname)
 
 INSTALLED_CPU_BACKENDS = [name for name, mod in CPU_BACKENDS.items() 
                         if _module_is_available(mod)]
 INSTALLED_GPU_BACKENDS = [name for name, mod in GPU_BACKENDS.items() 
                         if _module_is_available(mod)]
-INSTALLED_BACKENDS = [*INSTALLED_CPU_BACKENDS, *INSTALLED_GPU_BACKENDS]
 
 _AVAILABLE_GPUS = [get_gpu0(backend) for backend in INSTALLED_GPU_BACKENDS]
 AVAILABLE_GPUS = {name:gpu 
     for name,gpu in zip(INSTALLED_GPU_BACKENDS, _AVAILABLE_GPUS) if gpu}
+INSTALLED_BACKENDS = [
+    *INSTALLED_CPU_BACKENDS,
+    *[
+        name
+        for name in INSTALLED_GPU_BACKENDS
+        if name not in GPU_REQUIRED_BACKENDS or name in AVAILABLE_GPUS
+    ],
+]
 
 @pytest.fixture(scope="function", params=INSTALLED_CPU_BACKENDS)
 def backend_cpu(request):
@@ -50,4 +65,3 @@ def backend(request):
     params=list(AVAILABLE_GPUS.items()), ids=lambda p: p[0])
 def backend_gpu(request):
     return request.param
-

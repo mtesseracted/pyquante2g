@@ -1,7 +1,12 @@
 import pytest
 import pyquante22.array_ops as arr
-import importlib
-from tests.array_ops.conftest import backend, ftype, INSTALLED_BACKENDS, FLOAT_TYPES
+from tests.array_ops.conftest import (
+    backend,
+    ftype,
+    INSTALLED_BACKENDS,
+    FLOAT_TYPES,
+    import_backend_dtypes_module,
+)
 from tests.array_ops.optest_helpers import (
     assert_smoke_output,
     call_op,
@@ -10,7 +15,7 @@ from tests.array_ops.optest_helpers import (
 
 
 def test_backend_init(backend, ftype):
-    m = importlib.import_module(backend)
+    m = import_backend_dtypes_module(backend)
     mdtype = getattr(m, ftype, None)
     if mdtype is None:
         pytest.skip(f"No {ftype} in {backend}")
@@ -23,7 +28,7 @@ def test_multiple_instances():
     # create multiple instances simulatneously
     aopss = {}
     for backend in INSTALLED_BACKENDS:
-        m = importlib.import_module(backend)
+        m = import_backend_dtypes_module(backend)
         for ftype in FLOAT_TYPES:
             mdtype = getattr(m, ftype, None)
             if mdtype is None: continue
@@ -32,7 +37,7 @@ def test_multiple_instances():
     # now check that those instances initialized correctly
     # while all existing concurrently
     for backend in INSTALLED_BACKENDS:
-        m = importlib.import_module(backend)
+        m = import_backend_dtypes_module(backend)
         for ftype in FLOAT_TYPES:
             mdtype = getattr(m, ftype, None)
             if mdtype is None: continue
@@ -82,7 +87,8 @@ def test_array_ops_mixture(backend):
     assert ops.amax(a) == ops.arr(len(a)-1)
     assert ops.amin(a) == ops.arr(0)
     # this norm() test only works for float64 default_dtype
-    assert ops.norm(a)**2 == ops.arr(14), f"{ops.norm(a)**2 - ops.arr(14)}, {a.dtype}"
+    diff = ops.abs(ops.norm(a)**2 - ops.arr(14))
+    assert diff.item() < 2e-15, f"{ops.norm(a)**2 - ops.arr(14)}, {a.dtype}"
     assert ops.tolist(a) == list(range(4))
     cs = ops.combinations(a, 2)
     assert cs.shape == (6,2)

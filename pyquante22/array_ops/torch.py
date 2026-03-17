@@ -104,6 +104,9 @@ class TorchBackend(ArrayBackend):
     def take_along_axis(self, x, indices, axis=None):
         return torch.take_along_dim(x, indices, dim=axis)
 
+    def slice_add(self, x, axis, start, src):
+        return super().slice_add(x, axis, start, src)
+
     def scatter_add_inplace(self, x, axis, index, src):
         # note: torch.scatter_reduce is more general and can 
         # do any ufunc, not just add
