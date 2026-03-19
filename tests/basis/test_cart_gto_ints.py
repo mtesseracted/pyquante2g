@@ -19,23 +19,19 @@
 import pytest, sys, itertools
 from dataclasses import dataclass
 import numpy as np
-import pyquante22.array_ops as arr
-from pyquante22.ref_ints.utils import GTO
-from pyquante22.basis.cart_gto import CartGtoPrim as CGP#, amax
-from pyquante22.basis.cart_gto import CartGtoPrimPair as CGPP
-from pyquante22.basis.cart_gto_utils import find_sum_triplets
-import pyquante22.arb_math as arb
-from tests.array_ops.conftest import INSTALLED_BACKENDS
+from pyquante2g.ref_ints.utils import GTO
+from pyquante2g.basis.cart_gto import CartGtoPrim as CGP#, amax
+from pyquante2g.basis.cart_gto import CartGtoPrimPair as CGPP
+from pyquante2g.basis.cart_gto_utils import find_sum_triplets
+import pyquante2g.arb_math as arb
+from tests.torch_test_utils import make_torch_ops
 
 EPS = sys.float_info.epsilon
-BASIS_BACKENDS = [backend for backend in INSTALLED_BACKENDS if backend != "jax"]
 
 
-@pytest.fixture(params=BASIS_BACKENDS)
-def ao(request):
-    return arr.ArrayOps(
-        request.param, device=None, default_dtype="float64", int_dtype="int64"
-    )
+@pytest.fixture
+def ao():
+    return make_torch_ops()
 
 
 def am_mark(x, med=3, slo=9):  # mark ang.mom. cases

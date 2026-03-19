@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="/home/al/opt/pyquante22"
+repo="/home/al/opt/pyquante22_torch"
 ts="$(date +%Y%m%d_%H%M%S)"
 out_dir="./dev_scripts/pyspy"
 mkdir -p "$out_dir"
@@ -11,7 +11,7 @@ svg="${out_dir}/pyspy.${ts}.repo.svg"
 speedscope="${out_dir}/pyspy.${ts}.repo.speedscope.json"
 
 py-spy record --format raw --full-filenames -o "$raw" -- \
-  python -m pyquante22.basis.integral_engines || true
+  python -O -m pyquante2g.basis.integral_engines
 
 if [[ ! -s "$raw" ]]; then
   echo "No raw output at $raw"

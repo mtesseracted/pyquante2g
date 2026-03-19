@@ -7,13 +7,7 @@
     - eri: implementation of THO's ERI
     - overlap: overlaps and kinetic
     - nai: nuclear attraction integral
-- array_ops: interface for the vectorized backend
-    - core: abstractions for interfacing with backends
-    <!-- - cupy: -->
-    <!-- - jax: -->
-    - numpy:
-    <!-- - tensorflow: -->
-    - torch:
+- torch_ops: torch-native tensor helpers used by the vectorized code
 - atoms: for representing molecules
     - elmements: atomisitic info
     - molecule: classes for atoms and building molecules
@@ -48,21 +42,15 @@
 - ~~add necessary funcs to run cart_gto tests~~
 - need to abstract the tensor.device method at least for tests
 - ~~make cart_gto.py have alpha values that aren't full nd size~~
-- refactor so arb_math and ref_ints are one module with a chooseable back end
-- make analysis scripts for accuracies of: fboys, methods acc.
-and time (e.g. HT95 vs THO66 for NAI)
+- ~~make analysis scripts for accuracies of: fboys, methods acc.~~
+~~and time (e.g. HT95 vs THO66 for NAI)~~
 - after analysis, clean up the __main__ sections of those files
-- look at whether JIT works with ArrayOps, will need to use the functional
-version of JIT instead of decoratores, e.g. torch.script(), jax.jit(),
-cupy is questionable?, tf.function()
-    - cupy can use cp.RawKernel(), but it takes a string, not a function
+- look at whether JIT works cleanly with the torch helper layer and the
+integral kernels
 - ~~add tests for Molecule class, test NN energy, and marble test all init methods~~
 - ~~need a dedicated 2-center 3-GTO ERI for doing RI and Cholesky, which we will~~
     ~~want later so we can efficiently calculate higher-dim ERIs~~
 - Add an SCF class that can do RHF and UHF
-- ~~since the pipeline works with torch now we need a set of tests for ArrayOps~~
-    ~~that will test every operation available against torch as a reference~~
-- finish the numpy/cupy/jax/tensorflow backends, add to the tests for cart_gto
 - Analysis scripts:
     - Speed of some test calculations vs PySCF on cpu (& gpu ideally)
     - Speed and accuracy of our ERIs vs Libint and Libcint (arb_math reference)
@@ -70,19 +58,9 @@ cupy is questionable?, tf.function()
 ### For v0 publication:
 - Finish the RHF example: 12Mar26, some examples there, need to clean up
 - Make an example that uses backprop to do something (back prop to atom positions?)
-- add one more gpu backend, (cupy/jax for speed)
 - add benchmarks
     - benchmark vs a straight integral engine
 
 
-## Future Ideas
-- Make a pure s-type only HF/DFT calculation where basis functions dof's
-are set through backprop. This would use an s-type only integral library
-like the main idea needs.
 
 
-## Paper Series
-- GPU enabled pure-python, multi-backend supported integrals HF/DFT code
-- Pure s-type formulation (electron splatting?)
-- DDPM/GAN formulation of RDMs
-- Main idea

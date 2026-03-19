@@ -1,14 +1,12 @@
 import numpy as np
 import pytest
 
-import pyquante22.array_ops as arr
-from pyquante22.basis.cart_gto import CartGtoPrim as CGP
-from tests.array_ops.conftest import INSTALLED_BACKENDS
+from pyquante2g.basis.cart_gto import CartGtoPrim as CGP
+from tests.torch_test_utils import make_torch_ops
 
 
 RTOL = 1e-12
 ATOL = 1e-14
-BACKENDS = [backend for backend in INSTALLED_BACKENDS if backend != "jax"]
 
 
 def _to_numpy(x):
@@ -23,11 +21,9 @@ def _to_numpy(x):
     return np.asarray(x)
 
 
-@pytest.fixture(params=BACKENDS)
-def ao(request):
-    return arr.ArrayOps(
-        request.param, device=None, default_dtype="float64", int_dtype="int64"
-    )
+@pytest.fixture
+def ao():
+    return make_torch_ops()
 
 
 def _make_prim(ao, amoms, cens, alphas):

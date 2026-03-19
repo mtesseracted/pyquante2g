@@ -3,15 +3,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import pyquante22.array_ops as arr
-from pyquante22.atoms.molecule import load_sample_molecule
-from pyquante22.basis.basisset import BasisSet
-from pyquante22.basis.cart_gto_utils import cartPow2fullSym, sym2am
-from pyquante22.basis.integral_engines import IntegralEngineBase
-from pyquante22.utils.file_utils import find_closest_file_match, load_gbs_file
-from tests.array_ops.conftest import INSTALLED_BACKENDS
-
-BACKENDS = [backend for backend in INSTALLED_BACKENDS if backend != "jax"]
+from pyquante2g.atoms.molecule import load_sample_molecule
+from pyquante2g.basis.basisset import BasisSet
+from pyquante2g.basis.cart_gto_utils import cartPow2fullSym, sym2am
+from pyquante2g.basis.integral_engines import IntegralEngineBase
+from pyquante2g.utils.file_utils import find_closest_file_match, load_gbs_file
+from tests.torch_test_utils import make_torch_ops
 
 
 try:
@@ -93,11 +90,9 @@ def eri_case(request):
     return request.param
 
 
-@pytest.fixture(params=BACKENDS)
-def ao(request):
-    return arr.ArrayOps(
-        request.param, device=None, default_dtype="float64", int_dtype="int64"
-    )
+@pytest.fixture
+def ao():
+    return make_torch_ops()
 
 
 def _build_pyscf_mol(mol, basis_name):
@@ -105,7 +100,7 @@ def _build_pyscf_mol(mol, basis_name):
         (atom.symbol(), tuple(float(x) for x in mol.ao.tolist(atom.r)))
         for atom in mol.atoms
     ]
-    basis_dir = Path(__file__).resolve().parents[2] / "pyquante22" / "basis" / "cart_gto_data"
+    basis_dir = Path(__file__).resolve().parents[2] / "pyquante2g" / "basis" / "cart_gto_data"
     basis_file = find_closest_file_match(basis_dir, f"{basis_name}.gbs")
     if basis_file is None:
         raise ValueError(f"Cannot find {basis_name}.gbs in {basis_dir}")

@@ -1,6 +1,6 @@
 import sys
 import pytest
-import pyquante22.utils.math as math
+import pyquante2g.utils.math as math
 from math import factorial as py_factorial
 from math import isclose as py_isclose
 from math import pi, sqrt
@@ -71,7 +71,7 @@ def test_gamma_half_int():
 
 @pytest.mark.arb
 def test_igamma():
-    import pyquante22.arb_math as am
+    import pyquante2g.arb_math as am
     test_values = [
         (0.5, 1e-12), (0.5, 1e-20),
         (0.5, 0.0), (0.5, 0.1), (0.5, 0.5), (0.5, 1.0), (0.5, 4.0),
@@ -95,7 +95,7 @@ def test_igamma():
 @pytest.mark.arb
 def test_log_igamma():
     # go up tp 80 for 4*amax; amax=20
-    import pyquante22.arb_math as am
+    import pyquante2g.arb_math as am
     test_values = [
         (20, 1e-12), (20, 1e-20), (80, 1e-12), (80, 1e-20),
         (20.5, 0.1), (20.5, 1.0), (20.5, 11.0), (20.5, 50.0),
@@ -145,7 +145,7 @@ def fboys_pair(request):
 def test_fboys(fboys_pair):
     # go up tp 80 for 4*amax; amax=20
     # densely sample around piecewise boundaries, (m=m, x<1e-15), (m=40, x=1)
-    import pyquante22.arb_math as am
+    import pyquante2g.arb_math as am
     a, x = fboys_pair
     # can't get as accurate for large m and x: (m>20,x=m*0.9)
     rel_tol = 16*EPS if a < 20 else 64*EPS 

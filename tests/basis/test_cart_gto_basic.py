@@ -2,53 +2,29 @@ import os
 from pathlib import Path
 import pytest, sys
 import numpy as np
-import pyquante22.array_ops as arr
-from pyquante22.basis.cart_gto import CartGtoPrim as CGP
-from pyquante22.basis.cart_gto import CartGtoPrimPair as CGPP
-from tests.array_ops.conftest import INSTALLED_BACKENDS, import_backend_dtypes_module
+from pyquante2g.basis.cart_gto import CartGtoPrim as CGP
+from pyquante2g.basis.cart_gto import CartGtoPrimPair as CGPP
+from tests.torch_test_utils import TORCH_FLOAT_DTYPES, make_torch_ops
 
 
 ALLCLOSE_LOG_PATH = Path(
     os.environ.get(
         "PYQUANTE22_TEST_CART_GTO_BASIC_LOG",
-        "./tmp/pyquante22_test_cart_gto_basic_allclose.log",
+        "./tmp/pyquante2g_test_cart_gto_basic_allclose.log",
     )
 )
 
 
-FLOAT_DTYPES = ("float32", "float64")
-BASIS_BACKENDS = [backend for backend in INSTALLED_BACKENDS if backend != "jax"]
+FLOAT_DTYPES = TORCH_FLOAT_DTYPES
 
 
 def make_ao_params():
-    params = []
-    for backend in BASIS_BACKENDS:
-        module = import_backend_dtypes_module(backend)
-        for dtype in FLOAT_DTYPES:
-            if getattr(module, dtype, None) is None:
-                continue
-            if backend == "cupy" and dtype == "float64":
-                params.append(
-                    pytest.param(
-                        (backend, dtype),
-                        id=f"{backend}:{dtype}",
-                        marks=pytest.mark.skip(reason="cupy float64 conv1d too inaccurate"),
-                    )
-                )
-                continue
-            params.append(pytest.param((backend, dtype), id=f"{backend}:{dtype}"))
-    return params
+    return [pytest.param(dtype, id=f"torch:{dtype}") for dtype in FLOAT_DTYPES]
 
 
 @pytest.fixture(scope="module", params=make_ao_params())
 def ao(request):
-    backend, dtype = request.param
-    return arr.ArrayOps(
-        backend,
-        device=None,
-        default_dtype=dtype,
-        int_dtype="int64",
-    )
+    return make_torch_ops(default_dtype=request.param)
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +84,7 @@ def fmt_setting(value):
 
 
 def allclose_settings(ao, **settings):
-    vals = {"backend": ao.name, **settings}
+    vals = {"torch": ao.name, **settings}
     return ",".join(f"{key}={fmt_setting(val)}" for key, val in vals.items())
 
 
@@ -123,7 +99,7 @@ def log_allclose_summary(test_name, label, settings, pred, gt, rtol=0.0, atol=0.
         fh.write(f"{test_name}#{label}#{settings}@{summary_txt}\n")
 
 
-# @TODO add pytest.fixture of backends to test over, that will ensure
+# @TODO add a dedicated fixture for dtype coverage that will ensure
 # the convolution is correct before adding an explicit test
 # it can only do one right now, because it's hardcoded at the top of cart_gto.py
 def test_add(ao, eps):
@@ -228,7 +204,7 @@ def test_repr(ao, eps):
 # @pytest.mark.arb # @DEBUG
 @pytest.mark.med
 def test_calc_binoms(ao, eps):
-    from pyquante22.ref_ints.utils import binomial_prefactor
+    from pyquante2g.ref_ints.utils import binomial_prefactor
 
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     am1 = ao.arr([3, 1, 2], dtype=ao.int_dtype)
@@ -245,7 +221,7 @@ def test_calc_binoms(ao, eps):
     def gt_bps_arb():
         raise NotImplementedError()
 
-    # import pyquante22.arb_math as arb
+    # import pyquante2g.arb_math as arb
     # def gt_bps_arb(ia, ib, xpa, xpb):
     #     imax = ia+ib+1
     #     ret = [None,]*imax
@@ -349,7 +325,7 @@ def test_calc_binoms(ao, eps):
 
 
 def test_triple_conv_sum(ao, eps):
-    from pyquante22.basis.cart_gto import GtoMath
+    from pyquante2g.basis.cart_gto import GtoMath
     gm = GtoMath(ao)
     batch_sz = 11
     ax = np.random.rand(batch_sz, batch_sz-3)
@@ -387,7 +363,7 @@ def test_triple_conv_sum(ao, eps):
 
 
 def test_calc_h_array(ao, eps):
-    from pyquante22.ref_ints.eri import H_array
+    from pyquante2g.ref_ints.eri import H_array
 
     ams = ao.arr([0, 0, 0], dtype=ao.int_dtype)
     am1 = ao.arr([3, 1, 2], dtype=ao.int_dtype)

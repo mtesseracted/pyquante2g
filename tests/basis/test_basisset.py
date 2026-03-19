@@ -1,16 +1,15 @@
 import numpy as np
 import pytest
 
-import pyquante22.array_ops as arr
-from pyquante22.atoms.molecule import load_sample_molecule
-from pyquante22.basis.basisset import (
+from pyquante2g.atoms.molecule import load_sample_molecule
+from pyquante2g.basis.basisset import (
     BasisSet,
     CartGtoContPair,
     CartShell,
     CartShellBatch,
 )
-from pyquante22.basis.cart_gto import CartGtoPrim
-from tests.array_ops.conftest import INSTALLED_BACKENDS
+from pyquante2g.basis.cart_gto import CartGtoPrim
+from tests.torch_test_utils import make_torch_ops
 import itertools
 
 
@@ -18,14 +17,9 @@ SAMPLE_MOLECULES = ["Hydrogen", "LiH", "Water"]
 SAMPLE_BASES = ["sto-3g", "6-31g", "aug-cc-pvdz"]
 
 
-@pytest.fixture(params=INSTALLED_BACKENDS)
-def ao(request):
-    return arr.ArrayOps(
-        request.param,
-        device=None,
-        default_dtype="float64",
-        int_dtype="int64",
-    )
+@pytest.fixture
+def ao():
+    return make_torch_ops()
 
 
 def _assert_basic_methods(obj):
@@ -163,15 +157,8 @@ def test_basisset_bad_name(ao, basis_name):
         BasisSet(mol, name=basis_name)
 
 
-def test_jax_shell_pair_eri_smoke():
-    pytest.importorskip("jax")
-
-    ao = arr.ArrayOps(
-        "jax",
-        device=None,
-        default_dtype="float64",
-        int_dtype="int64",
-    )
+def test_torch_shell_pair_eri_smoke():
+    ao = make_torch_ops()
     mol = load_sample_molecule("Hydrogen", ao=ao)
     basis = BasisSet(mol, name="sto-3g")
     sh = basis.shells[0]

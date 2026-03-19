@@ -1,21 +1,15 @@
 import numpy as np
 import pytest
 
-import pyquante22.array_ops as arr
-from pyquante22.atoms.molecule import load_sample_molecule
-from pyquante22.basis.basisset import BasisSet
-from pyquante22.basis.integral_engines import IntegralEngineBase, guess_density_from_core
-from tests.array_ops.conftest import INSTALLED_BACKENDS
+from pyquante2g.atoms.molecule import load_sample_molecule
+from pyquante2g.basis.basisset import BasisSet
+from pyquante2g.basis.integral_engines import IntegralEngineBase, guess_density_from_core
+from tests.torch_test_utils import make_torch_ops
 
 
-BASIS_BACKENDS = [backend for backend in INSTALLED_BACKENDS if backend != "jax"]
-
-
-@pytest.fixture(params=BASIS_BACKENDS)
-def ao(request):
-    return arr.ArrayOps(
-        request.param, device=None, default_dtype="float64", int_dtype="int64"
-    )
+@pytest.fixture
+def ao():
+    return make_torch_ops()
 
 
 def _to_numpy(x):

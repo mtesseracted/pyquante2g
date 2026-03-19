@@ -17,11 +17,11 @@ from typing import Callable
 
 import numpy as np
 
-import pyquante22.array_ops as arr
-from pyquante22.atoms.molecule import load_sample_molecule
-from pyquante22.basis.basisset import BasisSet
-from pyquante22.basis.cart_gto_utils import cartPow2fullSym, sym2am
-from pyquante22.utils.file_utils import find_closest_file_match, load_gbs_file
+from pyquante2g import TorchOps
+from pyquante2g.atoms.molecule import load_sample_molecule
+from pyquante2g.basis.basisset import BasisSet
+from pyquante2g.basis.cart_gto_utils import cartPow2fullSym, sym2am
+from pyquante2g.utils.file_utils import find_closest_file_match, load_gbs_file
 
 try:
     from pyscf import gto
@@ -67,8 +67,9 @@ class TensorDiff:
 @dataclass
 class BenchmarkDefaults:
     cases: list[tuple[str, str]]
-    backend: str = "numpy"
     device: str | None = None
+    default_dtype: str = "float64"
+    int_dtype: str = "int64"
     integrals: tuple[str, ...] = ("overlap", "kinetic", "nuclear", "eri")
     shell_pairs: list[tuple[int, int]] | None = None
     shell_quartets: list[tuple[int, int, int, int]] | None = None
@@ -88,14 +89,21 @@ def parse_args(defaults: BenchmarkDefaults) -> argparse.Namespace:
         help="Benchmark case, e.g. sto-3g:Water. May be passed multiple times.",
     )
     parser.add_argument(
-        "--backend",
-        default=defaults.backend,
-        help="pyquante22 ArrayOps backend for the benchmark",
-    )
-    parser.add_argument(
         "--device",
         default=defaults.device,
-        help="ArrayOps device, e.g. cpu or cuda:0",
+        help="Torch device, e.g. cpu or cuda:0",
+    )
+    parser.add_argument(
+        "--dtype",
+        default=defaults.default_dtype,
+        choices=("float32", "float64"),
+        help="Floating-point dtype for pyquante2g tensors",
+    )
+    parser.add_argument(
+        "--int-dtype",
+        default=defaults.int_dtype,
+        choices=("int32", "int64"),
+        help="Integer dtype for pyquante2g tensors",
     )
     parser.add_argument(
         "--integrals",
@@ -205,7 +213,7 @@ def build_pyscf_mol(mol, basis_name: str):
         (atom.symbol(), tuple(float(x) for x in mol.ao.tolist(atom.r)))
         for atom in mol.atoms
     ]
-    basis_dir = resources.files("pyquante22.basis").joinpath("cart_gto_data")
+    basis_dir = resources.files("pyquante2g.basis").joinpath("cart_gto_data")
     basis_file = find_closest_file_match(basis_dir, f"{basis_name}.gbs")
     if basis_file is None:
         raise ValueError(f"Cannot find {basis_name}.gbs in {basis_dir}")
@@ -240,14 +248,14 @@ def assert_ao_ordering_matches(basis: BasisSet, pmol) -> None:
     bfs = basis.to_prims()
     if len(bfs) != len(ref_ao_labels):
         raise ValueError(
-            f"AO count mismatch: pyquante22={len(bfs)} pyscf={len(ref_ao_labels)}"
+            f"AO count mismatch: pyquante2g={len(bfs)} pyscf={len(ref_ao_labels)}"
         )
     for ii, (bf, label) in enumerate(zip(bfs, ref_ao_labels)):
         ours = cartPow2fullSym(bf.amom[0].tolist(), style="repeat")
         ref = label.split()[-1][1:]
         if ours != ref:
             raise ValueError(
-                f"AO ordering mismatch at {ii}: pyquante22={ours} pyscf={ref}"
+                f"AO ordering mismatch at {ii}: pyquante2g={ours} pyscf={ref}"
             )
 
 
@@ -401,7 +409,7 @@ def run_one_electron_benchmark(
     norm_j = get_shell_norms(pmol, j, norm_cache)
     ref = normalize_one_electron_block(ref_raw, norm_i, norm_j)
 
-    print_stats("pyquante22", engine_stats)
+    print_stats("pyquante2g", engine_stats)
     print_stats("libcint", libcint_stats)
     print(f"  speedup      x{libcint_stats.median / engine_stats.median:8.3f}")
 
@@ -446,7 +454,7 @@ def run_eri_benchmark(
         get_shell_norms(pmol, l, norm_cache),
     )
 
-    print_stats("pyquante22", engine_stats)
+    print_stats("pyquante2g", engine_stats)
     print_stats("libcint", libcint_stats)
     print(f"  speedup      x{libcint_stats.median / engine_stats.median:8.3f}")
 
@@ -465,11 +473,10 @@ def run_case(
     shell_quartets: list[tuple[int, int, int, int]],
 ) -> None:
     basis_name, sample_name = case
-    ao = arr.ArrayOps(
-        args.backend,
+    ao = TorchOps(
         device=args.device,
-        default_dtype="float64",
-        int_dtype="int64",
+        default_dtype=args.dtype,
+        int_dtype=args.int_dtype,
     )
 
     mol = load_sample_molecule(sample_name, ao=ao)
@@ -484,8 +491,8 @@ def run_case(
     print()
     print(f"=== {sample_name} / {basis_name} ===")
     print(
-        f" nbf={basis.nbf} nsh={basis.nsh} backend={args.backend} "
-        f"device={args.device}"
+        f" nbf={basis.nbf} nsh={basis.nsh} dtype={args.dtype} "
+        f"int_dtype={args.int_dtype} device={ao.device}"
     )
 
     for integral in args.integrals:
@@ -533,8 +540,9 @@ if __name__ == "__main__":
         cases=[
             ("aug-cc-pVQZ", "Cyclobutadiene"),
         ],
-        backend="cupy",
         device="cuda:0",
+        default_dtype="float64",
+        int_dtype="int64",
         integrals=("eri",),
         shell_pairs=[],
         shell_quartets=[

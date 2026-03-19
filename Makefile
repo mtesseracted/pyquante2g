@@ -1,6 +1,8 @@
-# Makefile for pyquante22 project
+# Makefile for pyquante2g project
 
 .PHONY: clean clean-editor install test
+
+INSTALL_EXTRAS := dev,test,figs
 
 reinstall: uninstall clean install
 
@@ -20,7 +22,7 @@ scrub:
 
 # Editable install
 install:
-	pip3 install -e ".[all]"
+	pip3 install -e ".[${INSTALL_EXTRAS}]"
 
 PKG := $(notdir $(shell pwd))
 uninstall:

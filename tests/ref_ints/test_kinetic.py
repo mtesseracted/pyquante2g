@@ -1,8 +1,8 @@
 import pytest
 import sys
 import numpy as np
-from pyquante22.ref_ints.utils import GTO, amax
-from pyquante22.ref_ints.overlap import kinetic_funcs
+from pyquante2g.ref_ints.utils import GTO, amax
+from pyquante2g.ref_ints.overlap import kinetic_funcs
 from math import isclose as py_isclose
 
 EPS = sys.float_info.epsilon # 2.2204-16, 2**-52
@@ -67,7 +67,7 @@ def test_overlap_even_odd():
 def test_kinetic_vs_arb1(am_case):
     # compare overlap funcs vs arb for 1 dim ((am,0,0),s|(am,0,0),s)
     # and test each dimension separately for am<6
-    import pyquante22.arb_math as arb
+    import pyquante2g.arb_math as arb
     # rtol = 16*EPS                    # 3.5527e-15, 2**-48
     rtol = 64*EPS                    # 1.4211e-14, 2**-46
     ra = np.asarray([0.,]*3)
@@ -107,8 +107,8 @@ def test_overlap_vs_arb2(am_case):
     # compare eri funcs vs arb for differnt ang.moms. (with
     # find_sum_triplets), different centers, and different 
     # exponents
-    import pyquante22.arb_math as arb
-    from pyquante22.basis.cart_gto_utils import find_sum_triplets
+    import pyquante2g.arb_math as arb
+    from pyquante2g.basis.cart_gto_utils import find_sum_triplets
 
     def gto2arb(gto):
         l = arb.arr_init(gto.l.tolist())

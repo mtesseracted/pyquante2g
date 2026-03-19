@@ -4,26 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pyquante22"]
+include = ["pyquante2g*"]
 
 [project]
-name = "pyquante22"
+name = "pyquante2g"
 version = "0.0.0"
 description = "vectorized pyquante2"
 authors = [{ name = "Aaron Mahler", email = "m.tesseracted@gmail.com" }]
 requires-python = ">=3.8"
 dependencies = [
     "numpy",
+    "torch",
 ]
 
 [project.optional-dependencies]
-gpu = ["torch"]             # machine learning extras
 dev = ["black"]             # development tools
 test = ["pytest","scipy",
     "mpmath"]
 figs = ["matplotlib"]
 #docs = ["sphinx"]           # documentation tools
-all = ["gpu","dev","test","figs"]
 
 [tool.black]
 line-length = 98

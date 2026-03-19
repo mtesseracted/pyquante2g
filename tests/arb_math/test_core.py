@@ -1,5 +1,5 @@
 import pytest
-import pyquante22.arb_math as arb
+import pyquante2g.arb_math as arb
 import mpmath as mpm
 from fractions import Fraction
 
