@@ -366,7 +366,7 @@ class CartGtoPrim:
         ret = self.gm.triple_conv_dot(a_flat[0], a_flat[1], a_flat[2], boys)
         ret = ret.reshape(Na, C)
 
-        ret *= (-2 * co.pi / self.alpha)[:, None]
+        ret = ret * (-2 * co.pi / self.alpha)[:, None]
         return ret
 
     def calc_eri2(self, other):
@@ -396,7 +396,7 @@ class CartGtoPrim:
             self.alpha[:, None] * other.alpha[None, :]
             * ao.sqrt(self.alpha[:, None] + other.alpha[None, :])
         )
-        ret *= pref
+        ret = ret * pref
         return ret
 
 #end class CartGtoPrim:
@@ -513,7 +513,7 @@ class CartGtoPrimPair:
         # pows = ao.pow(self.gamma[:,:,None], irng)
         # ret *= (co.ghalfs[irng] / pows)[:,:,None,:] # add spatial dim
         pows = ao.pow(self.gamma[:,:,None], -irng) # interstingly this is more accurate
-        ret *= (co.ghalfs[irng] * pows)[:,:,None,:] # add spatial dim
+        ret = ret * (co.ghalfs[irng] * pows)[:,:,None,:] # add spatial dim
         return ao.sum(ret, axis=3)
 
 
@@ -528,8 +528,8 @@ class CartGtoPrimPair:
         invgam = co.one / self.gamma # (Na,Nb)
         ret = ao.exp(ao.square(ga.cen[:,None,:] - gb.cen[None,:,:]) * 
             (-ga.alpha[:,None]*gb.alpha[None,:]*invgam)[:,:,None])
-        ret *= ao.sqrt(invgam)[:,:,None]
-        ret *= self.calc_overlap1d(offset=offset)  # 1D overlaps
+        ret = ret * ao.sqrt(invgam)[:,:,None]
+        ret = ret * self.calc_overlap1d(offset=offset)  # 1D overlaps
         return ao.prod(ret, axis=2)
     # end def calc_overlap(self, nd=3, offset=None):
 
@@ -547,21 +547,21 @@ class CartGtoPrimPair:
         two, three = 2*co.one, 3*co.one
         fac0 = ab * (two * ao.sum(amb,axis=1) + three)
         term0 = self.calc_overlap()
-        term0 *= fac0[None,:]
+        term0 = term0 * fac0[None,:]
 
         term1 = self.calc_overlap(offset=offsets[0])
-        term1 += self.calc_overlap(offset=offsets[1])
-        term1 += self.calc_overlap(offset=offsets[2])
-        term1 *= (-two * ao.square(ab))[None,:]
+        term1 = term1 + self.calc_overlap(offset=offsets[1])
+        term1 = term1 + self.calc_overlap(offset=offsets[2])
+        term1 = term1 * (-two * ao.square(ab))[None,:]
 
         if gb.lmax > 1: # 
             l2 = gb.amom[:, 0][None,:] # (1,Nb)
             term2 = (l2 * (l2 - 1)) * self.calc_overlap(offset=-offsets[0])
             l2 = gb.amom[:, 1][None,:]
-            term2 += (l2 * (l2 - 1)) * self.calc_overlap(offset=-offsets[1])
+            term2 = term2 + (l2 * (l2 - 1)) * self.calc_overlap(offset=-offsets[1])
             l2 = gb.amom[:, 2][None,:]
-            term2 += (l2 * (l2 - 1)) * self.calc_overlap(offset=-offsets[2])
-            term2 *= -co.half
+            term2 = term2 + (l2 * (l2 - 1)) * self.calc_overlap(offset=-offsets[2])
+            term2 = term2 * -co.half
 
             return term0 + term1 + term2
 
@@ -587,8 +587,8 @@ class CartGtoPrimPair:
         iiflat = iflat - 2 * rflat
 
         h_vals_flat = ao.broadcast_to(bps, full_sz)[...,irmask]  # irng > amom == 0 from bps
-        h_vals_flat *= ao.pow(g4s[...,irmask], (rflat - iflat)[None,None,None,:])
-        h_vals_flat *= co.binom2s[iflat, rflat][None,None,None,:]
+        h_vals_flat = h_vals_flat * ao.pow(g4s[...,irmask], (rflat - iflat)[None,None,None,:])
+        h_vals_flat = h_vals_flat * co.binom2s[iflat, rflat][None,None,None,:]
 
         ret = ao.zeros(full_sz[:-1])
         sum_ids = ao.broadcast_to(iiflat.reshape(1, -1), h_vals_flat.shape)
@@ -714,8 +714,8 @@ class CartGtoPrimPair:
         aa = self.ga.alpha[:, None]
         ab = self.gb.alpha[None, :]
         rab2 = ao.sum(ao.square(self.ga.cen[:, None, :] - self.gb.cen[None, :, :]), axis=2)
-        ret *= (-2 * co.pi / self.gamma)[:, :, None]
-        ret *= ao.exp(-aa * ab * rab2 / self.gamma)[:, :, None]
+        ret = ret * (-2 * co.pi / self.gamma)[:, :, None]
+        ret = ret * ao.exp(-aa * ab * rab2 / self.gamma)[:, :, None]
         return ret
 
 
@@ -965,9 +965,9 @@ class CartGtoPrimPair:
             gab[:, :, None, None] * gcd[None, None, :, :]
             * ao.sqrt(gab[:, :, None, None] + gcd[None, None, :, :])
         )
-        ret *= pref
-        ret *= ao.exp(-aa * ab * rab2 / gab)[:, :, None, None]
-        ret *= ao.exp(-ac * ad * rcd2 / gcd)[None, None, :, :]
+        ret = ret * pref
+        ret = ret * ao.exp(-aa * ab * rab2 / gab)[:, :, None, None]
+        ret = ret * ao.exp(-ac * ad * rcd2 / gcd)[None, None, :, :]
         return ret
     # end def calc_eri(self, other):
 
@@ -1010,8 +1010,8 @@ class CartGtoPrimPair:
         pref = co.eri_fac / (
             gab[:, :, None] * gc[None, None, :] * ao.sqrt(gab[:, :, None] + gc[None, None, :])
         )
-        ret *= pref
-        ret *= ao.exp(-aa * ab * rab2 / gab)[:, :, None]
+        ret = ret * pref
+        ret = ret * ao.exp(-aa * ab * rab2 / gab)[:, :, None]
         return ret
 
 
@@ -1049,10 +1049,10 @@ class CartGtoPrimPair:
             gab[:, :, None, None] * gab[None, None, :, :]
             * ao.sqrt(gab[:, :, None, None] + gab[None, None, :, :])
         )
-        ret *= pref
+        ret = ret * pref
         exp_ab = ao.exp(-aa * ab * rab2 / gab)
-        ret *= exp_ab[:, :, None, None] 
-        ret *= exp_ab[None, None, :, :]
+        ret = ret * exp_ab[:, :, None, None]
+        ret = ret * exp_ab[None, None, :, :]
         return ret
 
 

@@ -138,7 +138,8 @@ class GtoMath:
         col_large = m[0, :] > msw
         series_vals = self.fboys_series(m, x, max_terms=8)
         large_vals = self.fboys_large_m(m, x, max_terms=12)
-        igamma_vals = self.fboys_igamma(m, x)
+        x_safe = ao.where(row_small[:, None], ao.ones(x.shape, dtype=x.dtype), x)
+        igamma_vals = self.fboys_igamma(m, x_safe)
         rest_vals = ao.where(col_large[None, :], large_vals, igamma_vals)
         return ao.where(row_small[:, None], series_vals, rest_vals)
 
@@ -150,7 +151,8 @@ class GtoMath:
         row_small = x[:, 0] < xsw
         series_vals = self.fboys_series(m, x, max_terms=8)
         # series_vals = self.fboys_series8_unrolled(m, x,)
-        igamma_vals = self.fboys_igamma(m, x)
+        x_safe = ao.where(row_small[:, None], ao.ones(x.shape, dtype=x.dtype), x)
+        igamma_vals = self.fboys_igamma(m, x_safe)
         return ao.where(row_small[:, None], series_vals, igamma_vals)
 
 
@@ -174,12 +176,12 @@ class GtoMath:
         """Taylor series expansion at x=0"""
         ao = self.ao
         a = m + 0.5
-        term = ao.ones(x.shape) # n = 0 term
+        term = ao.ones(x.shape, dtype=x.dtype) # n = 0 term
         s = term / a
 
         for k in range(1, max_terms): #
-            term *= -x / k
-            s += term / (a+k)
+            term = term * (-x / k)
+            s = s + term / (a + k)
         return 0.5 * s
 
 
@@ -321,12 +323,13 @@ class GtoMath:
         m2 = m + 0.5
         ret = 0.5 * ao.exp(-x) / m2
 
-        s = 1
-        term, m3 = 1, m2 + 0
+        s = ao.ones(x.shape, dtype=x.dtype)
+        term = ao.ones(x.shape, dtype=x.dtype)
+        m3 = m2
         for k in range(1, max_terms):
-            m3 += 1
-            term *= x / m3
-            s += term
+            m3 = m3 + 1
+            term = term * (x / m3)
+            s = s + term
 
         return ret * s
 
