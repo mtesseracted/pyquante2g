@@ -47,7 +47,7 @@ class IntegralEngineBase:
         self.shell_pairs = None
 
 
-    def build_one_electron_matrices(self, store=True):
+    def build_one_electron_matrices(self, store=False):
         bfs = self.basis.to_prims()
         ao, nbf = self.ao, self.basis.nbf
         s_mat = ao.zeros((nbf, nbf))
@@ -91,7 +91,7 @@ class IntegralEngineBase:
     #end def build_one_electron_matrices(self):
 
 
-    def build_eri_4d_bf(self, store=True):
+    def build_eri_4d_bf(self, store=False):
         """build in per-basis func loop form with 4-fold symmetry"""
         nbf = self.basis.nbf
         bfs = self.basis.to_prims()
@@ -121,7 +121,7 @@ class IntegralEngineBase:
     #def build_eri_4d_bf(self):
 
 
-    def build_eri_4d_sh(self, store=True):
+    def build_eri_4d_sh(self, store=False):
         """build in per-shell loop form with 8-fold symmetry """
         basis = self.basis
         nsh, nbf, ranges = basis.nsh, basis.nbf, basis.shell_range
@@ -145,7 +145,7 @@ class IntegralEngineBase:
     #end def build_eri_4d_sh(self):
 
 
-    def build_eri_4d_batch(self, batch_size=int(2*10), store=True):
+    def build_eri_4d_batch(self, batch_size=int(2*10), store=False):
         """build dense eri with batching"""
         basis = self.basis
         nbf = self.basis.nbf
@@ -170,35 +170,36 @@ class IntegralEngineBase:
     def iter_eri_batch(self, batch_size=int(2**10)):
         """Yield ((shell_slices), (ao_slices)) in row-major batching order."""
         # batching scheme tries to fill as many shells as possible, starting
-        # with the last axis
+        # with the last axis. Use primitive-packed shell sizes as the batching
+        # metric, since ERI memory is dominated by primitive-pair intermediates.
         basis = self.basis
-        nbf = basis.nbf
         nsh = basis.nsh
         shells = basis.shells
         ranges = basis.shell_range
-        sh_nbfs = [sh.nbf for sh in shells]
-        max_sh_nbf = max(sh_nbfs) if sh_nbfs else 0
+        basis_metric = basis.size
+        sh_metrics = [len(sh) for sh in shells]
+        max_sh_metric = max(sh_metrics) if sh_metrics else 0
 
         if batch_size is None or batch_size <= 0:
-            batch_size = max_sh_nbf**4
+            batch_size = max_sh_metric**4
 
-        if max_sh_nbf > 0 and batch_size < max_sh_nbf**4:
-            print(f"::WARN:: batch_size ({batch_size}) smaller than largest shell quartet ({max_sh_nbf**4})")
+        if max_sh_metric > 0 and batch_size < max_sh_metric**4:
+            print(f"::WARN:: batch_size ({batch_size}) smaller than largest shell quartet ({max_sh_metric**4})")
 
         full = slice(0, nsh)
 
-        def _iter_shell_slices(max_ao):
-            if max_ao <= 0:
-                max_ao = 1
+        def _iter_shell_slices(max_metric):
+            if max_metric <= 0:
+                max_metric = 1
             start = 0
             acc = 0
-            for idx, sz in enumerate(sh_nbfs):
-                if acc == 0 and sz > max_ao:
+            for idx, sz in enumerate(sh_metrics):
+                if acc == 0 and sz > max_metric:
                     yield slice(idx, idx + 1)
                     start = idx + 1
                     acc = 0
                     continue
-                if acc > 0 and acc + sz > max_ao:
+                if acc > 0 and acc + sz > max_metric:
                     yield slice(start, idx)
                     start = idx
                     acc = 0
@@ -223,35 +224,35 @@ class IntegralEngineBase:
             yield (si, sj, sk, sl), (ao_i, ao_j, ao_k, ao_l)
 
         # Try full (j,k,l) rows first if they fit for the largest shell.
-        max_i_ao = batch_size // (nbf**3)
-        if max_i_ao >= max_sh_nbf and nsh > 0:
-            for si in _iter_shell_slices(max_i_ao):
+        max_i_metric = batch_size // (basis_metric**3)
+        if max_i_metric >= max_sh_metric and nsh > 0:
+            for si in _iter_shell_slices(max_i_metric):
                 yield from _yield_pair(si, full, full, full)
             return
 
         # Otherwise, split j (and deeper if needed) per i shell.
         for i in range(nsh):
-            ni = sh_nbfs[i]
-            max_j_ao = batch_size // (ni * (nbf**2))
-            if max_j_ao >= max_sh_nbf:
-                for sj in _iter_shell_slices(max_j_ao):
+            ni = sh_metrics[i]
+            max_j_metric = batch_size // (ni * (basis_metric**2))
+            if max_j_metric >= max_sh_metric:
+                for sj in _iter_shell_slices(max_j_metric):
                     yield from _yield_pair(slice(i, i + 1), sj, full, full)
                 continue
 
             for j in range(nsh):
-                nj = sh_nbfs[j]
-                max_k_ao = batch_size // (ni * nj * nbf)
-                if max_k_ao >= max_sh_nbf:
-                    for sk in _iter_shell_slices(max_k_ao):
+                nj = sh_metrics[j]
+                max_k_metric = batch_size // (ni * nj * basis_metric)
+                if max_k_metric >= max_sh_metric:
+                    for sk in _iter_shell_slices(max_k_metric):
                         yield from _yield_pair(
                             slice(i, i + 1), slice(j, j + 1), sk, full
                         )
                     continue
 
                 for k in range(nsh):
-                    nk = sh_nbfs[k]
-                    max_l_ao = batch_size // (ni * nj * nk)
-                    for sl in _iter_shell_slices(max_l_ao):
+                    nk = sh_metrics[k]
+                    max_l_metric = batch_size // (ni * nj * nk)
+                    for sl in _iter_shell_slices(max_l_metric):
                         yield from _yield_pair(
                             slice(i, i + 1),
                             slice(j, j + 1),
@@ -480,7 +481,7 @@ class IntegralEngineSparse(IntegralEngineBase):
         self.eri_sparse_ids = {}
 
 
-    def build_one_electron_matrices_symm(self, store=True):
+    def build_one_electron_matrices_symm(self, store=False):
         """build and store in packed triu form"""
         bfs = self.basis.to_prims()
         ao, nbf = self.ao, self.basis.nbf
@@ -518,7 +519,7 @@ class IntegralEngineSparse(IntegralEngineBase):
         return s_mat, t_mat, v_mat
 
 
-    def build_one_electron_matrices(self, store=True):
+    def build_one_electron_matrices(self, store=False):
         """build in packed triu and expand to full"""
         ao, nbf = self.ao, self.basis.nbf
         if not('S_symm' in self.one_e_mats and 
@@ -552,7 +553,7 @@ class IntegralEngineSparse(IntegralEngineBase):
             self.one_e_mats['V'] = v_mat
         return s_mat, t_mat, v_mat
 
-    def build_eri_4d_bf(self, store=True):
+    def build_eri_4d_bf(self, store=False):
         return self.build_eri_4d_sh(store=store)
 
     def _eri_sparse_size(self):
@@ -587,7 +588,7 @@ class IntegralEngineSparse(IntegralEngineBase):
         self.eri_sparse_ids[key] = ids
         return ids
 
-    def build_eri_sparse_sh(self, store=True):
+    def build_eri_sparse_sh(self, store=False):
         basis = self.basis
         self._build_shell_pairs()
         eri_sparse = self.ao.zeros((self._eri_sparse_size(),))
@@ -614,7 +615,7 @@ class IntegralEngineSparse(IntegralEngineBase):
 
         return eri4d
 
-    def build_eri_4d_sh(self, store=True):
+    def build_eri_4d_sh(self, store=False):
         eri_sparse = self.build_eri_sparse_sh(store=store)
         eri4d = self._expand_eri_sparse(eri_sparse)
 
@@ -676,7 +677,7 @@ class IntegralEngineSparse(IntegralEngineBase):
             sh_slices, ao_slices = _bounds_to_slices(bounds)
             yield sh_batch, sh_slices, ao_slices
 
-    def build_eri_sparse_batch(self, batch_size=int(2**10), store=True):
+    def build_eri_sparse_batch(self, batch_size=int(2**10), store=False):
         basis = self.basis
         eri_sparse = self.ao.zeros((self._eri_sparse_size(),))
 
@@ -695,7 +696,7 @@ class IntegralEngineSparse(IntegralEngineBase):
             self.two_e_mats['ERI_symm'] = eri_sparse
         return eri_sparse
 
-    def build_eri_4d_batch(self, batch_size=int(2*10), store=True):
+    def build_eri_4d_batch(self, batch_size=int(2*10), store=False):
         eri_sparse = self.build_eri_sparse_batch(batch_size=batch_size, store=store)
         eri4d = self._expand_eri_sparse(eri_sparse, batch_size=batch_size)
 
@@ -727,6 +728,17 @@ class IntegralEngineSparse(IntegralEngineBase):
 
             yield ao_slices, eri_block
 
+    def _ensure_eri_sparse(self, batch_size):
+        need_grad = any(
+            getattr(atom.r, "requires_grad", False)
+            for atom in self.basis.molecule.atoms
+        )
+        if self.eri_sparse is None:
+            return self.build_eri_sparse_batch(batch_size=batch_size, store=True)
+        if need_grad and not getattr(self.eri_sparse, "requires_grad", False):
+            return self.build_eri_sparse_batch(batch_size=batch_size, store=True)
+        return self.eri_sparse
+
     def build_j_dense(self, density, eri=None):
         if eri is not None:
             return super().build_j_dense(density, eri=eri)
@@ -738,12 +750,15 @@ class IntegralEngineSparse(IntegralEngineBase):
         return self.build_k_batch(density, batch_size=None)
 
     def build_j_batch(self, density, batch_size=int(2**10)):
+        self._ensure_eri_sparse(batch_size=batch_size)
         return super().build_j_batch(density, batch_size=batch_size)
 
     def build_k_batch(self, density, batch_size=int(2**10)):
+        self._ensure_eri_sparse(batch_size=batch_size)
         return super().build_k_batch(density, batch_size=batch_size)
 
     def build_jk_batch(self, density, batch_size=int(2**10)):
+        self._ensure_eri_sparse(batch_size=batch_size)
         return super().build_jk_batch(density, batch_size=batch_size)
 
 

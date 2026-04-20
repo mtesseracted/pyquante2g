@@ -88,3 +88,49 @@ def test_nai_dr(digits_case):
         perr = (result - expected) / expected
         assert mpm.almosteq(result, expected), f"@{float(x):.2f} %err = {float(perr):.2e}"
 #end def test_nai_dr(digits_case):
+
+
+def test_nai_dr_mixed_exponents(digits_case):
+    # test for known solution with d-type at various radii and mixed exponents
+    # For rho(r) = r^2 exp(-g*r^2), with g = alpha + beta
+    # V(r) = 3*sqrt(pi)/(8*g^(5/2))*erf(sqrt(g)*r)/r - exp(-g*r^2)/(4*g^2)
+    # we can get this with NAIs by summing NAI(di(alpha),s(beta)|r); di in [dx2, dy2, dz2]
+    arb.set_dps(digits_case)
+    ra0 = arb.arr_init([0,] * 3)
+    am000 = arb.arr_init([0, 0, 0])
+    am200 = arb.arr_init([2, 0, 0])
+    am020 = arb.arr_init([0, 2, 0])
+    am002 = arb.arr_init([0, 0, 2])
+    gds_am = [am200, am020, am002]
+
+    cases = [
+        (0.0, 1.0, 1.0),
+        (1.0, 1.0, 1.0),
+        (0.0, 0.5, 2.25),
+        (1.0, 0.5, 2.25),
+    ]
+
+    for x, alpha, beta in cases:
+        alpha = arb.arb(alpha)
+        beta = arb.arb(beta)
+        gamma = alpha + beta
+        gs = [beta, am000, ra0]
+        gds = [[alpha, am, ra0] for am in gds_am]
+
+        if x == 0.0:
+            expected = 2 * arb.pi * arb.pow(gamma, -2)
+            ra1 = ra0
+        else:
+            ax = arb.arb(x)
+            c0 = 3 * arb.sqrt(arb.pi) / (8 * arb.pow(gamma, arb.arb(5) / 2))
+            c1 = -arb.arb(0.25) / arb.pow(gamma, 2)
+            expected = c0 * arb.erf(arb.sqrt(gamma) * ax) / ax
+            expected += c1 * arb.exp(-gamma * ax * ax)
+            expected *= 4 * arb.pi
+            ra1 = arb.arr_init([ax, 0, 0])
+
+        result = -sum([arb.nuclear_attraction(*gd, *gs, ra1) for gd in gds])
+        perr = (result - expected) / expected
+        assert mpm.almosteq(
+            result, expected
+        ), f"@{float(x):.2f}, a={float(alpha):.2f}, b={float(beta):.2f} %err = {float(perr):.2e}"

@@ -192,6 +192,7 @@ def test_sparse_jk_matches_dense(ao):
     k_sparse_dense = ie_sparse.build_k_dense(density)
     j_sparse_jk, k_sparse_jk = ie_sparse.build_jk_batch(density, batch_size=128)
 
+    assert ie_sparse.eri_sparse is not None
     assert np.allclose(_to_numpy(j_sparse), _to_numpy(j_dense), rtol=1e-10, atol=1e-12)
     assert np.allclose(_to_numpy(k_sparse), _to_numpy(k_dense), rtol=1e-10, atol=1e-12)
     assert np.allclose(_to_numpy(j_sparse_dense), _to_numpy(j_dense), rtol=1e-10, atol=1e-12)

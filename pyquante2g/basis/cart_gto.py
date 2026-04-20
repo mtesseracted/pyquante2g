@@ -719,12 +719,7 @@ class CartGtoPrimPair:
         return ret
 
 
-    def calc_ci(self, Hab, Hcd, qp, delta, b2):
-        """C-array kernel per dimension (THO Eq. 3.11)
-        Hab: (N1, L+1); Hcd: (N2, M+1); qp, delta: (N1, N2)
-        b2: (>=S+1, >=U+1)
-        returns: (N1, N2, S+1)
-        """
+    def _calc_ci_full(self, Hab, Hcd, qp, delta, b2):
         ao, co = self.ao, self.co
 
         N1, Lp1 = Hab.shape
@@ -798,6 +793,42 @@ class CartGtoPrimPair:
             ans = ao.index_add_inplace(ans, 2, uvals, corr)
 
         return ans
+
+
+    def _calc_ci_chunk_n2(self, N1, N2, S):
+        target_elems = int(2**18) if str(self.ao.device).startswith("cuda") else int(2**20)
+        denom = max(1, N1 * max(1, S + 1))
+        chunk_n2 = max(1, target_elems // denom)
+        return min(N2, chunk_n2)
+
+
+    def calc_ci(self, Hab, Hcd, qp, delta, b2):
+        """C-array kernel per dimension (THO Eq. 3.11)
+        Hab: (N1, L+1); Hcd: (N2, M+1); qp, delta: (N1, N2)
+        b2: (>=S+1, >=U+1)
+        returns: (N1, N2, S+1)
+        """
+        N1, Lp1 = Hab.shape
+        N2, Mp1 = Hcd.shape
+        L, M = Lp1 - 1, Mp1 - 1
+        S = L + M
+        chunk_n2 = self._calc_ci_chunk_n2(N1, N2, S)
+        if chunk_n2 >= N2:
+            return self._calc_ci_full(Hab, Hcd, qp, delta, b2)
+
+        parts = []
+        for start in range(0, N2, chunk_n2):
+            stop = min(start + chunk_n2, N2)
+            parts.append(
+                self._calc_ci_full(
+                    Hab,
+                    Hcd[start:stop],
+                    qp[:, start:stop],
+                    delta[:, start:stop],
+                    b2,
+                )
+            )
+        return self.ao.concat(parts, axis=1)
 
 
     def calc_c_array(self, other):
