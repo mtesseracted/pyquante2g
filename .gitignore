@@ -11,4 +11,5 @@ __pycache__
 *.cif
 *.mol
 *.gbs
-
+dev_scripts/pyspy/
+tmp/
