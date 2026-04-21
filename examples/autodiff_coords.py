@@ -98,7 +98,7 @@ def main():
     # basis_name = "aug-cc-pVDZ"
     batch_size = int(2**15)
     stretch_facs = np.arange(0.5, 1.5, 0.1)
-    plot_path = f"dev_scripts/autodiff_coords_scan__{sample_name}__{basis_name}.png"
+    plot_path = f"examples/autodiff_coords_scan__{sample_name}__{basis_name}.png"
     ao = arr.TorchOps(
         "torch", device="cuda:0", default_dtype="float64", int_dtype="int64"
     )
@@ -212,7 +212,7 @@ def main():
 
     fig.suptitle(f"{sample_name} / {basis_name}")
     fig.tight_layout()
-    fig.savefig(plot_path, dpi=150)
+    fig.savefig(plot_path, dpi=100, bbox_inches='tight')
     print(f"Saved plot to {plot_path}")
     plt.show()
     plt.close(fig)
